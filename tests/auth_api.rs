@@ -35,7 +35,7 @@ impl Fixture {
             data_dir: data.path().into(),
             bootstrap_admin: None,
             cookie_secure: false,
-            upstream_token_enabled: false,
+            upstream_compatibility_account: false,
             master_key: None,
         };
         let state = AppState::new(db, &config);

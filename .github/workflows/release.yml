@@ -12,8 +12,8 @@ jobs:
   preflight:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
       - name: Validate tag and package versions
@@ -36,8 +36,8 @@ jobs:
     needs: preflight
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
@@ -79,8 +79,8 @@ jobs:
             target: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
@@ -100,7 +100,7 @@ jobs:
         run: |
           mkdir -p dist/package
           cp "target/${{ matrix.target }}/release/lightbws" dist/package/lightbws
-          cp README.md LICENSE dist/package/
+          cp README.md README.zh-CN.md LICENSE dist/package/
           tar -C dist/package -czf "dist/lightbws-${GITHUB_REF_NAME}-${{ matrix.target }}.tar.gz" .
           cd dist
           shasum -a 256 "lightbws-${GITHUB_REF_NAME}-${{ matrix.target }}.tar.gz" > "lightbws-${GITHUB_REF_NAME}-${{ matrix.target }}.tar.gz.sha256"
@@ -110,12 +110,12 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force dist/package | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/lightbws.exe" dist/package/
-          Copy-Item README.md,LICENSE dist/package/
+          Copy-Item README.md,README.zh-CN.md,LICENSE dist/package/
           $archive = "dist/lightbws-${env:GITHUB_REF_NAME}-${{ matrix.target }}.zip"
           Compress-Archive -Path dist/package/* -DestinationPath $archive
           $hash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLower()
           "$hash  $(Split-Path $archive -Leaf)" | Set-Content "$archive.sha256"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-${{ matrix.target }}
           path: |
@@ -135,12 +135,12 @@ jobs:
     needs: [binaries, docker]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: release-*
           path: dist
           merge-multiple: true
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
           fail_on_unmatched_files: true

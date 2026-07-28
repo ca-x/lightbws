@@ -50,11 +50,13 @@ pub struct CreateProjectRequest {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CreateSecretRequest {
     pub key: String,
     pub value: String,
     #[serde(default)]
     pub note: String,
+    #[serde(alias = "project_ids")]
     pub project_ids: Option<Vec<Uuid>>,
 }
 

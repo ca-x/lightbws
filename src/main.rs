@@ -26,7 +26,7 @@ async fn main() -> Result<()> {
     let db = Database::connect(&config.database_path()).await?;
     let users = UserRepository::new(db.clone());
     users.bootstrap(config.bootstrap_admin.as_ref()).await?;
-    if config.upstream_token_enabled {
+    if config.upstream_compatibility_account {
         let admin = users
             .list()
             .await?
@@ -36,7 +36,7 @@ async fn main() -> Result<()> {
         MachineRepository::new(db.clone())
             .ensure_compatibility_account(admin.id)
             .await?;
-        tracing::warn!("the public upstream fake-server token is enabled");
+        tracing::warn!("publicly known upstream fake-server compatibility credentials are enabled");
     }
     let master_key = MasterKey::load_or_create(&config)?;
     let state = AppState::new(db, &config).with_master_key(master_key);

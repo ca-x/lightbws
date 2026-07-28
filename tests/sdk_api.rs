@@ -45,7 +45,7 @@ impl Fixture {
             data_dir: data.path().into(),
             bootstrap_admin: None,
             cookie_secure: false,
-            upstream_token_enabled: false,
+            upstream_compatibility_account: false,
             master_key: None,
         };
         Self {
@@ -94,6 +94,7 @@ async fn sdk_rejects_invalid_bearer_and_persists_project_secret_round_trip() {
     assert_eq!(rejected.status(), StatusCode::UNAUTHORIZED);
 
     let bearer = fixture.bearer().await;
+    assert_eq!(bearer.split('.').count(), 3);
     let second_bearer = fixture.bearer().await;
     assert_ne!(bearer, second_bearer);
     let sessions = machine_session::Entity::find()
@@ -161,7 +162,7 @@ async fn sdk_rejects_invalid_bearer_and_persists_project_secret_round_trip() {
                 "key": "2.key-ciphertext",
                 "value": "2.value-ciphertext",
                 "note": "2.note-ciphertext",
-                "project_ids": [project_id]
+                "projectIds": [project_id]
             })),
             Some(&bearer),
         ))

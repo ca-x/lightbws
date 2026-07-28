@@ -4,6 +4,7 @@ use axum::{
     http::{HeaderMap, StatusCode, request::Parts},
     routing::{get, post},
 };
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, TransactionTrait};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -63,6 +64,11 @@ struct ProjectQuery {
 
 struct SdkAuth;
 
+#[derive(Debug, Deserialize)]
+struct JwtSessionClaims {
+    sub: String,
+}
+
 impl FromRequestParts<AppState> for SdkAuth {
     type Rejection = AppError;
 
@@ -76,8 +82,9 @@ impl FromRequestParts<AppState> for SdkAuth {
             .and_then(|value| value.to_str().ok())
             .and_then(|value| value.strip_prefix("Bearer "))
             .ok_or(AppError::Unauthorized)?;
+        let session_token = session_token_from_bearer(bearer);
         MachineRepository::new(state.db.clone())
-            .authenticate_session(bearer)
+            .authenticate_session(&session_token)
             .await?;
         Ok(Self)
     }
@@ -132,15 +139,42 @@ async fn token(
                 .ok_or(AppError::Unauthorized)?,
         )
         .await?;
-    let access_token = repository.create_session(machine.id).await?;
+    let session_token = repository.create_session(machine.id).await?;
     Ok(Json(TokenResponse {
-        access_token,
+        access_token: session_jwt(&session_token, machine.client_id),
         expires_in: u64::try_from(SDK_SESSION_TTL_SECONDS).expect("positive SDK session TTL"),
         refresh_token: None,
         token_type: "Bearer",
         scope: "api.secrets",
         encrypted_payload: ENCRYPTED_PAYLOAD,
     }))
+}
+
+fn session_jwt(session_token: &str, client_id: Uuid) -> String {
+    let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"none","typ":"JWT"}"#);
+    let payload = json!({
+        "nbf": crate::domain::now(),
+        "exp": crate::domain::now() + SDK_SESSION_TTL_SECONDS,
+        "iss": "lightbws",
+        "client_id": client_id,
+        "sub": session_token,
+        "organization": ORGANIZATION_ID,
+        "scope": ["api.secrets"],
+    });
+    let payload = URL_SAFE_NO_PAD.encode(payload.to_string());
+    format!("{header}.{payload}.lightbws")
+}
+
+fn session_token_from_bearer(bearer: &str) -> String {
+    let Some(payload) = bearer.split('.').nth(1) else {
+        return bearer.to_owned();
+    };
+    let Ok(payload) = URL_SAFE_NO_PAD.decode(payload) else {
+        return bearer.to_owned();
+    };
+    serde_json::from_slice::<JwtSessionClaims>(&payload)
+        .map(|claims| claims.sub)
+        .unwrap_or_else(|_| bearer.to_owned())
 }
 
 async fn list_projects(

@@ -15,7 +15,7 @@ pub struct Config {
     pub data_dir: PathBuf,
     pub bootstrap_admin: Option<BootstrapAdmin>,
     pub cookie_secure: bool,
-    pub upstream_token_enabled: bool,
+    pub upstream_compatibility_account: bool,
     pub master_key: Option<SecretString>,
 }
 
@@ -38,14 +38,15 @@ impl Config {
             _ => bail!("LIGHTBWS_ADMIN_USERNAME and LIGHTBWS_ADMIN_PASSWORD must be set together"),
         };
         let cookie_secure = parse_bool("LIGHTBWS_COOKIE_SECURE", false)?;
-        let upstream_token_enabled = parse_bool("LIGHTBWS_ENABLE_UPSTREAM_TOKEN", false)?;
+        let upstream_compatibility_account =
+            parse_bool("LIGHTBWS_ENABLE_UPSTREAM_COMPATIBILITY_ACCOUNT", false)?;
         let master_key = env_value("LIGHTBWS_MASTER_KEY").map(SecretString::from);
         Ok(Self {
             bind,
             data_dir,
             bootstrap_admin,
             cookie_secure,
-            upstream_token_enabled,
+            upstream_compatibility_account,
             master_key,
         })
     }
@@ -98,7 +99,10 @@ impl std::fmt::Debug for Config {
             .field("data_dir", &self.data_dir)
             .field("bootstrap_admin", &self.bootstrap_admin.is_some())
             .field("cookie_secure", &self.cookie_secure)
-            .field("upstream_token_enabled", &self.upstream_token_enabled)
+            .field(
+                "upstream_compatibility_account",
+                &self.upstream_compatibility_account,
+            )
             .field(
                 "master_key",
                 &self.master_key.as_ref().map(|_| "[REDACTED]"),
