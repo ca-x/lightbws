@@ -1,6 +1,6 @@
 # LightBWS
 
-LightBWS 是一个可持久化、自托管的 Bitwarden Secrets Manager fake-server 兼容实现。单个发布二进制同时包含 Axum 和 SeaORM 后端、内嵌的 React/Astryx 管理界面、SDK 兼容接口、加密导入导出，以及定时远程备份。
+LightBWS 是一个可持久化、自托管的 Bitwarden Secrets Manager server。单个发布二进制同时包含 Axum 和 SeaORM 后端、内嵌的 React/Astryx 管理界面、SDK 兼容接口、加密导入导出，以及定时远程备份。
 
 [English](README.md)
 

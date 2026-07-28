@@ -444,7 +444,7 @@ pub async fn health() -> Json<Value> {
 pub async fn help() -> Json<Value> {
     Json(json!({
         "name": "LightBWS",
-        "compatibility": "Bitwarden Secrets Manager fake-server",
+        "compatibility": "Bitwarden Secrets Manager server",
         "documentation": {
             "officialSdk": "https://github.com/bitwarden/sdk-sm",
             "bws": "https://github.com/bitwarden/sdk-sm/tree/main/crates/bws",

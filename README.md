@@ -1,6 +1,6 @@
 # LightBWS
 
-LightBWS is a persistent, self-hosted implementation of the Bitwarden Secrets Manager fake-server contract. It combines an Axum and SeaORM backend, an embedded React/Astryx administration interface, SDK-compatible endpoints, encrypted import and export, and scheduled remote backups in one release binary.
+LightBWS is a persistent, self-hosted Bitwarden Secrets Manager server. It combines an Axum and SeaORM backend, an embedded React/Astryx administration interface, SDK-compatible endpoints, encrypted import and export, and scheduled remote backups in one release binary.
 
 [简体中文](README.zh-CN.md)
 
