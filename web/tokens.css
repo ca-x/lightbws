@@ -1,0 +1,44 @@
+/* Hallmark · pre-emit critique: P5 H5 E5 S5 R4 V5 · genre: modern-minimal · macrostructure: Workbench · theme: Cobalt · enrichment: none · nav: N3 · footer: none */
+:root {
+  color-scheme: light dark;
+  --font-body: var(--font-family-body);
+  --font-display: var(--font-family-heading);
+  --font-code: var(--font-family-code);
+  --paper: var(--color-background-body);
+  --surface: var(--color-background-surface);
+  --surface-muted: var(--color-background-muted);
+  --surface-hover: var(--color-overlay-hover);
+  --surface-pressed: var(--color-overlay-pressed);
+  --ink: var(--color-text-primary);
+  --ink-secondary: color-mix(in srgb, var(--color-text-primary) 72%, var(--color-background-surface));
+  --ink-muted: color-mix(in srgb, var(--color-text-primary) 62%, var(--color-background-surface));
+  --line: var(--color-border);
+  --line-strong: var(--color-border-emphasized);
+  --signal: light-dark(oklch(52% 0.22 260), oklch(72% 0.16 255));
+  --signal-soft: light-dark(oklch(95% 0.035 260), oklch(27% 0.055 257));
+  --signal-ink: light-dark(oklch(99% 0.005 260), oklch(18% 0.025 260));
+  --color-accent-ink: var(--signal-ink);
+  --success: var(--color-success);
+  --warning: var(--color-warning);
+  --danger: var(--color-error);
+  --shadow: var(--color-shadow);
+  --overlay: var(--color-overlay);
+  --radius-control: 6px;
+  --radius-panel: 8px;
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --duration-press: 130ms;
+  --duration-layer: 200ms;
+  font-family: var(--font-body);
+  font-synthesis: none;
+}
+
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
+
+@media (prefers-contrast: more) {
+  :root {
+    --line: color-mix(in srgb, var(--ink) 32%, transparent);
+    --line-strong: color-mix(in srgb, var(--ink) 58%, transparent);
+    --ink-secondary: color-mix(in srgb, var(--ink) 88%, var(--surface));
+  }
+}

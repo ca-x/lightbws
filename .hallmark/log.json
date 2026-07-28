@@ -1,0 +1,11 @@
+[
+  {
+    "date": "2026-07-29",
+    "macrostructure": "Workbench",
+    "theme": "Cobalt",
+    "enrichment": "none",
+    "nav": "N3",
+    "footer": "none",
+    "brief": "LightBWS self-hosted secrets management workbench"
+  }
+]

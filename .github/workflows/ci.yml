@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.94.0
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: npm --prefix web ci --ignore-scripts
+      - run: npm --prefix web run typecheck
+      - run: npm --prefix web run test:ci
+      - run: npm --prefix web run build
+      - run: cargo fmt --all --check
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+      - run: cargo test --all-targets --all-features
+      - run: cargo build --locked --release
+      - run: cargo check --manifest-path demo/sdk-demo/Cargo.toml

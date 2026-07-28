@@ -1,0 +1,11 @@
+.git
+.github
+.hallmark
+data
+docs
+screenshoot
+target
+web/dist
+web/node_modules
+*.sqlite3
+*.key

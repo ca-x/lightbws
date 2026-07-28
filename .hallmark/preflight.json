@@ -1,0 +1,10 @@
+{
+  "version": "1.1.0",
+  "genre": "modern-minimal",
+  "macrostructure": "Workbench",
+  "theme": "Cobalt",
+  "nav": "N3",
+  "footer": "none",
+  "enrichment": "none",
+  "brief": "LightBWS self-hosted secrets management workbench"
+}
