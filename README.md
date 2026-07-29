@@ -1,5 +1,7 @@
 # LightBWS
 
+[![Docker Build and Push](https://github.com/ca-x/lightbws/actions/workflows/docker.yml/badge.svg)](https://github.com/ca-x/lightbws/actions/workflows/docker.yml)  [![Release](https://github.com/ca-x/lightbws/actions/workflows/release.yml/badge.svg)](https://github.com/ca-x/lightbws/actions/workflows/release.yml)
+
 LightBWS is a persistent, self-hosted Bitwarden Secrets Manager server. It combines an Axum and SeaORM backend, an embedded React/Astryx administration interface, SDK-compatible endpoints, encrypted import and export, and scheduled remote backups in one release binary.
 
 [简体中文](README.zh-CN.md)
