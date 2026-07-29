@@ -16,36 +16,192 @@ permissions:
   contents: read
   packages: write
 
+concurrency:
+  group: docker-${{ inputs.release == true && github.sha || github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
 jobs:
-  image:
-    if: inputs.release || github.event.workflow_run.conclusion == 'success'
-    runs-on: ubuntu-latest
+  source:
+    if: inputs.release == true || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      SOURCE_REF: ${{ inputs.release == true && github.sha || github.event.workflow_run.head_sha }}
+      RELEASE: ${{ inputs.release == true }}
+    outputs:
+      sha: ${{ steps.source.outputs.sha }}
+      short_sha: ${{ steps.source.outputs.short_sha }}
+      version: ${{ steps.source.outputs.version }}
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.release && github.sha || github.event.workflow_run.head_sha }}
-      - uses: docker/setup-qemu-action@v4
+          persist-credentials: false
+          ref: ${{ env.SOURCE_REF }}
+      - name: Require Docker Hub credentials
+        run: |
+          set -euo pipefail
+          if [[ -z "$DOCKERHUB_USERNAME" || -z "$DOCKERHUB_TOKEN" ]]; then
+            echo "::error::DOCKERHUB_USERNAME and DOCKERHUB_TOKEN are required for Docker publishing"
+            exit 1
+          fi
+      - name: Verify image source
+        id: source
+        run: |
+          set -euo pipefail
+          source_sha="$(git rev-parse HEAD)"
+          package_version="$(sed -n '/^\[package\]/,/^\[/ s/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)"
+          test -n "$package_version"
+          if [[ "$RELEASE" == "true" ]]; then
+            test "$GITHUB_REF_NAME" = "v${package_version}"
+          fi
+          printf 'sha=%s\n' "$source_sha" >> "$GITHUB_OUTPUT"
+          printf 'short_sha=%s\n' "${source_sha:0:7}" >> "$GITHUB_OUTPUT"
+          printf 'version=%s\n' "$package_version" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.platform }} image
+    needs: source
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux/amd64
+            platform_tag: amd64
+            cache_scope: amd64
+          - runner: ubuntu-24.04-arm
+            platform: linux/arm64
+            platform_tag: arm64
+            cache_scope: arm64
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      SOURCE_SHA: ${{ needs.source.outputs.sha }}
+      BUILD_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ needs.source.outputs.sha }}
       - uses: docker/setup-buildx-action@v4
-      - uses: docker/login-action@v4
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - id: meta
-        uses: docker/metadata-action@v6
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
         with:
-          images: ghcr.io/${{ github.repository }}
-          tags: |
-            type=semver,pattern={{version}},enable=${{ inputs.release == true }}
-            type=semver,pattern={{major}}.{{minor}},enable=${{ inputs.release == true }}
-            type=raw,value=latest,enable=${{ inputs.release != true }}
-            type=sha,enable=${{ inputs.release != true }}
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
+      - name: Select temporary image tags
+        id: images
+        env:
+          PLATFORM_TAG: ${{ matrix.platform_tag }}
+        run: |
+          set -euo pipefail
+          {
+            printf 'tags<<EOF\n'
+            printf 'ghcr.io/%s:build-%s-%s-%s\n' "${GITHUB_REPOSITORY,,}" "$SOURCE_SHA" "$BUILD_ID" "$PLATFORM_TAG"
+            printf 'docker.io/czyt/lightbws:build-%s-%s-%s\n' "$SOURCE_SHA" "$BUILD_ID" "$PLATFORM_TAG"
+            printf 'EOF\n'
+          } >> "$GITHUB_OUTPUT"
       - uses: docker/build-push-action@v7
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          file: ./Dockerfile
+          platforms: ${{ matrix.platform }}
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          tags: ${{ steps.images.outputs.tags }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ needs.source.outputs.version }}
+            org.opencontainers.image.revision=${{ needs.source.outputs.sha }}
+          cache-from: type=gha,scope=lightbws-${{ matrix.cache_scope }}
+          cache-to: type=gha,mode=max,scope=lightbws-${{ matrix.cache_scope }}
+          provenance: true
+          sbom: true
+
+  merge:
+    name: Publish multi-platform images
+    needs: [source, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      SOURCE_SHA: ${{ needs.source.outputs.sha }}
+      BUILD_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+      VERSION: ${{ needs.source.outputs.version }}
+      RELEASE: ${{ inputs.release == true }}
+    steps:
+      - uses: docker/setup-buildx-action@v4
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: |
+            ghcr.io/${{ github.repository }}
+            docker.io/czyt/lightbws
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}},value=${{ github.ref_name }},enable=${{ inputs.release == true }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ github.ref_name }},enable=${{ inputs.release == true }}
+            type=raw,value=latest,enable=${{ inputs.release == true }}
+            type=raw,value=latest,enable=${{ inputs.release != true }}
+            type=raw,value=sha-${{ needs.source.outputs.short_sha }},enable=${{ inputs.release != true }}
+      - name: Create and verify multi-platform manifests
+        env:
+          DOCKER_METADATA_OUTPUT_JSON: ${{ steps.meta.outputs.json }}
+        run: |
+          set -euo pipefail
+          for image in "ghcr.io/${GITHUB_REPOSITORY,,}" "docker.io/czyt/lightbws"; do
+            mapfile -t final_tags < <(
+              jq -r --arg image "$image" \
+                '.tags[] | select(startswith($image + ":"))' \
+                <<< "$DOCKER_METADATA_OUTPUT_JSON"
+            )
+            test "${#final_tags[@]}" -gt 0
+            tag_args=()
+            for tag in "${final_tags[@]}"; do
+              tag_args+=(--tag "$tag")
+            done
+            docker buildx imagetools create "${tag_args[@]}" \
+              "${image}:build-${SOURCE_SHA}-${BUILD_ID}-amd64" \
+              "${image}:build-${SOURCE_SHA}-${BUILD_ID}-arm64"
+            if [[ "$RELEASE" == "true" ]]; then
+              verify_tag="${image}:${VERSION}"
+            else
+              verify_tag="${image}:latest"
+            fi
+            docker buildx imagetools inspect --raw "$verify_tag" \
+              | jq -e '
+                  [.manifests[]?.platform
+                    | select(.os == "linux")
+                    | .architecture] as $architectures
+                  | ($architectures | index("amd64")) != null
+                    and ($architectures | index("arm64")) != null
+                ' >/dev/null
+          done

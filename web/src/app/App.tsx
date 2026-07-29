@@ -17,6 +17,8 @@ import type {
 } from "./types"
 import { useI18n } from "../i18n/I18nProvider"
 import type { MessageKey } from "../i18n/messages"
+import type { AstryxThemeName } from "../theme/astryxThemes"
+import { ThemePicker } from "../theme/ThemePicker"
 import { useTheme } from "../theme/ThemeProvider"
 
 type Page = "dashboard" | "projects" | "secrets" | "machines" | "users" | "trash" | "integrations" | "backups" | "transfer" | "settings"
@@ -60,7 +62,11 @@ function LoginPage({ onAuthenticated }: { onAuthenticated: (session: Session) =>
   return (
     <main className="login-page">
       <header className="login-tools">
-        <Button variant="ghost" icon={<Languages />} label={locale === "en" ? "简体中文" : "English"} onClick={() => setLocale(locale === "en" ? "zh-CN" : "en")} />
+        <div className="login-language" role="group" aria-label={t("language")}>
+          <Languages aria-hidden="true" />
+          <button type="button" aria-pressed={locale === "zh-CN"} data-active={locale === "zh-CN"} onClick={() => setLocale("zh-CN")}>{t("chinese")}</button>
+          <button type="button" aria-pressed={locale === "en"} data-active={locale === "en"} onClick={() => setLocale("en")}>{t("english")}</button>
+        </div>
         <IconButton variant="ghost" label={resolved === "dark" ? t("light") : t("dark")} tooltip={resolved === "dark" ? t("light") : t("dark")} icon={resolved === "dark" ? <Sun /> : <Moon />} onClick={() => setMode(resolved === "dark" ? "light" : "dark")} />
       </header>
       <section className="login-grid">
@@ -335,7 +341,8 @@ function TransferPage({ notify }: { notify: (text: string, error?: boolean) => v
 function SettingsPage() {
   const { locale, setLocale, t } = useI18n(); const { mode, setMode } = useTheme()
   const modes: Array<{ value: ThemeMode; icon: ReactNode; label: MessageKey }> = [{ value: "system", icon: <Monitor />, label: "system" }, { value: "light", icon: <Sun />, label: "light" }, { value: "dark", icon: <Moon />, label: "dark" }]
-  return <div className="page"><PageHeader title={t("settings")} description={t("appearanceText")} /><section className="settings-stack"><article className="panel settings-panel"><div><p className="eyebrow">ASTRYX</p><h2>{t("themeMode")}</h2></div><div className="choice-grid">{modes.map((choice) => <button key={choice.value} className="choice-card" data-selected={mode === choice.value} onClick={() => setMode(choice.value)}>{choice.icon}<span>{t(choice.label)}</span>{mode === choice.value && <Check />}</button>)}</div></article><article className="panel settings-panel"><div><p className="eyebrow">I18N</p><h2>{t("language")}</h2></div><div className="choice-grid two"><button className="choice-card" data-selected={locale === "zh-CN"} onClick={() => setLocale("zh-CN")}><Globe2 /><span>{t("chinese")}</span>{locale === "zh-CN" && <Check />}</button><button className="choice-card" data-selected={locale === "en"} onClick={() => setLocale("en")}><Languages /><span>{t("english")}</span>{locale === "en" && <Check />}</button></div></article></section></div>
+  const themeLabels: Record<AstryxThemeName, string> = { neutral: t("themeNeutral"), stone: t("themeStone"), butter: t("themeButter"), matcha: t("themeMatcha"), chocolate: t("themeChocolate"), gothic: t("themeGothic"), y2k: t("themeY2k") }
+  return <div className="page"><PageHeader title={t("settings")} description={t("appearanceText")} /><section className="settings-stack"><article className="panel settings-panel"><div><p className="eyebrow">ASTRYX</p><h2>{t("themeStyle")}</h2><p>{t("themeStyleText")}</p></div><ThemePicker labels={themeLabels} /></article><article className="panel settings-panel"><div><p className="eyebrow">MODE</p><h2>{t("themeMode")}</h2></div><div className="choice-grid">{modes.map((choice) => <button key={choice.value} className="choice-card" data-selected={mode === choice.value} onClick={() => setMode(choice.value)}>{choice.icon}<span>{t(choice.label)}</span>{mode === choice.value && <Check className="selection-check" />}</button>)}</div></article><article className="panel settings-panel"><div><p className="eyebrow">I18N</p><h2>{t("language")}</h2></div><div className="choice-grid two"><button className="choice-card" data-selected={locale === "zh-CN"} onClick={() => setLocale("zh-CN")}><Globe2 /><span>{t("chinese")}</span>{locale === "zh-CN" && <Check className="selection-check" />}</button><button className="choice-card" data-selected={locale === "en"} onClick={() => setLocale("en")}><Languages /><span>{t("english")}</span>{locale === "en" && <Check className="selection-check" />}</button></div></article></section></div>
 }
 
 function ListToolbar({ query, onQuery }: { query: string; onQuery: (value: string) => void }) { const { t } = useI18n(); return <div className="list-toolbar"><Search /><input aria-label={t("search")} placeholder={`${t("search")}…`} value={query} onChange={(event) => onQuery(event.target.value)} /></div> }

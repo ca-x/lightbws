@@ -6,9 +6,9 @@ LightBWS is a persistent, self-hosted Bitwarden Secrets Manager server. It combi
 
 ## Screenshots
 
-![LightBWS login](screenshoot/login.png)
+![LightBWS login](screenshoot/login-en.png)
 
-![LightBWS dashboard](screenshoot/dashboard.png)
+![LightBWS dashboard](screenshoot/dashboard-en.png)
 
 ## Features
 
@@ -16,11 +16,11 @@ LightBWS is a persistent, self-hosted Bitwarden Secrets Manager server. It combi
 - Administrator bootstrap from environment variables and Web user management.
 - Projects, secrets, machine accounts, soft-delete trash, and one-time access-token display.
 - Cookie sessions, CSRF protection, Argon2id passwords, encrypted backup credentials, and hardened response headers.
-- Chinese and English UI with Astryx system, light, and dark theme modes.
+- Chinese and English UI with seven built-in Astryx themes and system, light, and dark color modes.
 - Portable passphrase-encrypted import and export.
 - Scheduled encrypted backups to S3-compatible storage and WebDAV.
 - Frontend embedded into every release binary. No separate Web server is required.
-- Linux GNU/musl, macOS, and Windows release archives plus multi-architecture GHCR images.
+- Linux GNU/musl, macOS, and Windows release archives plus multi-architecture GHCR and Docker Hub images.
 
 ## Quick start
 
@@ -48,6 +48,8 @@ docker compose logs -f lightbws
 
 Compose refuses to start while `LIGHTBWS_ADMIN_PASSWORD` is empty, so the public template cannot become the installed administrator password. The named volume `lightbws-data` persists the SQLite database and generated `master.key` across container upgrades.
 
+Images are published to both `ghcr.io/ca-x/lightbws` and `docker.io/czyt/lightbws`. To use Docker Hub with Compose, set `LIGHTBWS_IMAGE=docker.io/czyt/lightbws:latest` in `.env`.
+
 To upgrade to the newest published image:
 
 ```bash
@@ -72,6 +74,16 @@ The administrator variables are required only when the database is empty. Existi
 
 ## Configuration
 
+The first three values in `.env.example` configure Docker Compose itself; the LightBWS process does not read them directly:
+
+| Compose variable | Default | Purpose |
+| --- | --- | --- |
+| `LIGHTBWS_IMAGE` | `ghcr.io/ca-x/lightbws:latest` | Container image pulled by Compose. `docker.io/czyt/lightbws:latest` is the Docker Hub equivalent. |
+| `LIGHTBWS_LISTEN_ADDRESS` | `127.0.0.1` | Host interface used for the published port. Keep loopback unless an HTTPS reverse proxy or trusted network requires another address. |
+| `LIGHTBWS_PORT` | `8080` | Host port mapped to port `8080` inside the container. |
+
+The remaining values are passed into the LightBWS container:
+
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `LIGHTBWS_BIND` | `0.0.0.0:8080` | HTTP listen address. |
@@ -79,17 +91,19 @@ The administrator variables are required only when the database is empty. Existi
 | `LIGHTBWS_ADMIN_USERNAME` | none | Initial administrator username. |
 | `LIGHTBWS_ADMIN_PASSWORD` | none | Initial administrator password, minimum 8 characters. |
 | `LIGHTBWS_COOKIE_SECURE` | `false` | Require HTTPS for Web session cookies. Enable behind an HTTPS reverse proxy. |
-| `LIGHTBWS_ENABLE_UPSTREAM_COMPATIBILITY_ACCOUNT` | `false` | Create the upstream fake-server's publicly known fixed credentials for compatibility tests. Never enable it on a shared or internet-facing deployment. |
+| `LIGHTBWS_ENABLE_UPSTREAM_COMPATIBILITY_ACCOUNT` | `false` | Create the upstream SDK test fixtures' publicly known fixed credentials. Never enable it on a shared or internet-facing deployment. |
 | `LIGHTBWS_MASTER_KEY` | generated | Base64url or hexadecimal 32-byte key used to encrypt stored backup credentials. |
 | `RUST_LOG` | `lightbws=info,tower_http=info` | Structured log filter. |
+
+The image already sets `LIGHTBWS_BIND=0.0.0.0:8080` and `LIGHTBWS_DATA_DIR=/data`. Native binary deployments can override both runtime variables; Compose normally changes the host mapping through `LIGHTBWS_LISTEN_ADDRESS` and `LIGHTBWS_PORT` instead.
 
 If `LIGHTBWS_MASTER_KEY` is not set, LightBWS creates `master.key` with owner-only permissions in the data directory. Persist this file together with the SQLite database. Remote backup files cannot be recovered without it.
 
 ## SDK and BWS
 
-LightBWS preserves all routes used by the upstream fake server and persists the ciphertext sent by the official SDK. Create a machine account in the Web UI, copy its one-time credential, and point the client at the LightBWS base URL. Credential exchange issues a random one-hour bearer token whose digest is stored in SQLite. Every SDK request checks expiry and the machine account's current revocation state.
+LightBWS implements the Secrets Manager routes used by the official SDK and persists the ciphertext sent by the client. Create a machine account in the Web UI, copy its one-time credential, and point the client at the LightBWS base URL. Credential exchange issues a random one-hour bearer token whose digest is stored in SQLite. Every SDK request checks expiry and the machine account's current revocation state.
 
-Normal deployments must use machine accounts created in the Web UI. `LIGHTBWS_ENABLE_UPSTREAM_COMPATIBILITY_ACCOUNT` exists only for upstream fake-server fixtures that expect publicly known fixed client credentials. It is a test compatibility switch, not a production authentication mode.
+Normal deployments must use machine accounts created in the Web UI. `LIGHTBWS_ENABLE_UPSTREAM_COMPATIBILITY_ACCOUNT` exists only for upstream SDK fixtures that expect publicly known fixed client credentials. It is a test compatibility switch, not a production authentication mode.
 
 ```bash
 export BWS_ACCESS_TOKEN='0.<client-id>.<client-secret>:X8vbvA0bduihIDe/qrzIQQ=='
@@ -199,4 +213,4 @@ git push origin main
 git push origin v0.1.0
 ```
 
-The Docker workflow publishes `linux/amd64` and `linux/arm64` images to `ghcr.io/ca-x/lightbws`. Each release archive contains the binary, both language READMEs, and the license, with a companion SHA-256 checksum asset. Frontend files are already embedded in the binary.
+The Docker workflow builds `linux/amd64` and `linux/arm64` on native GitHub runners, then publishes the same multi-platform tags to `ghcr.io/ca-x/lightbws` and `docker.io/czyt/lightbws`. Repository or organization secrets named `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` are required. Each release archive contains the binary, both language READMEs, and the license, with a companion SHA-256 checksum asset. Frontend files are already embedded in the binary.

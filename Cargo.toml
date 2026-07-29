@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.94"
 license-file = "LICENSE"
-description = "A persistent self-hosted Bitwarden Secrets Manager compatible server"
+description = "A persistent self-hosted Bitwarden Secrets Manager server"
 repository = "https://github.com/ca-x/lightbws"
 build = "build.rs"
 

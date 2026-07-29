@@ -6,9 +6,9 @@ LightBWS 是一个可持久化、自托管的 Bitwarden Secrets Manager server�
 
 ## 界面截图
 
-![LightBWS 登录界面](screenshoot/login.png)
+![LightBWS 登录界面](screenshoot/login-zh.png)
 
-![LightBWS 控制台](screenshoot/dashboard.png)
+![LightBWS 控制台](screenshoot/dashboard-zh.png)
 
 ## 功能
 
@@ -16,11 +16,11 @@ LightBWS 是一个可持久化、自托管的 Bitwarden Secrets Manager server�
 - 支持通过环境变量初始化管理员，并在 Web 界面管理用户。
 - 支持项目、密钥、机器账号、软删除回收站和一次性访问令牌展示。
 - 使用 Cookie 会话、CSRF 防护、Argon2id 密码、加密备份凭据和安全响应头。
-- Web 界面支持中文和英文，并提供 Astryx 系统、浅色和深色主题。
+- Web 界面支持中文和英文，提供 7 个 Astryx 内置主题，以及跟随系统、浅色和深色模式。
 - 支持使用口令加密的可移植导入导出。
 - 支持将加密备份定时写入兼容 S3 的存储和 WebDAV。
 - 前端已嵌入每个发布二进制，不需要单独的 Web 服务器。
-- 提供 Linux GNU/musl、macOS、Windows 发布压缩包，以及多架构 GHCR 镜像。
+- 提供 Linux GNU/musl、macOS、Windows 发布压缩包，以及多架构 GHCR 和 Docker Hub 镜像。
 
 ## 快速开始
 
@@ -48,6 +48,8 @@ docker compose logs -f lightbws
 
 如果 `LIGHTBWS_ADMIN_PASSWORD` 为空，Compose 会拒绝启动，因此公开模板不会被用作已安装实例的管理员密码。命名卷 `lightbws-data` 会在容器升级后继续保留 SQLite 数据库和生成的 `master.key`。
 
+镜像会同时发布到 `ghcr.io/ca-x/lightbws` 和 `docker.io/czyt/lightbws`。如需通过 Docker Hub 拉取，可在 `.env` 中设置 `LIGHTBWS_IMAGE=docker.io/czyt/lightbws:latest`。
+
 更新到最新发布镜像：
 
 ```bash
@@ -72,6 +74,16 @@ export LIGHTBWS_ADMIN_PASSWORD='replace-with-a-long-password'
 
 ## 配置
 
+`.env.example` 的前三项只用于配置 Docker Compose，LightBWS 进程不会直接读取它们：
+
+| Compose 变量 | 默认值 | 用途 |
+| --- | --- | --- |
+| `LIGHTBWS_IMAGE` | `ghcr.io/ca-x/lightbws:latest` | Compose 拉取的容器镜像。Docker Hub 对应地址为 `docker.io/czyt/lightbws:latest`。 |
+| `LIGHTBWS_LISTEN_ADDRESS` | `127.0.0.1` | 发布端口绑定的宿主机地址。除非通过 HTTPS 反向代理或可信网络访问，否则应保留回环地址。 |
+| `LIGHTBWS_PORT` | `8080` | 映射到容器内 `8080` 端口的宿主机端口。 |
+
+其余变量会传入 LightBWS 容器：
+
 | 变量 | 默认值 | 用途 |
 | --- | --- | --- |
 | `LIGHTBWS_BIND` | `0.0.0.0:8080` | HTTP 监听地址。 |
@@ -79,17 +91,19 @@ export LIGHTBWS_ADMIN_PASSWORD='replace-with-a-long-password'
 | `LIGHTBWS_ADMIN_USERNAME` | 无 | 初始管理员用户名。 |
 | `LIGHTBWS_ADMIN_PASSWORD` | 无 | 初始管理员密码，至少 8 个字符。 |
 | `LIGHTBWS_COOKIE_SECURE` | `false` | 要求 Web 会话 Cookie 只通过 HTTPS 传输。使用 HTTPS 反向代理时启用。 |
-| `LIGHTBWS_ENABLE_UPSTREAM_COMPATIBILITY_ACCOUNT` | `false` | 创建 upstream fake-server 使用的公开固定凭据，仅用于兼容性测试。不要在共享或面向互联网的部署中启用。 |
+| `LIGHTBWS_ENABLE_UPSTREAM_COMPATIBILITY_ACCOUNT` | `false` | 创建上游 SDK 测试夹具使用的公开固定凭据，仅用于兼容性测试。不要在共享或面向互联网的部署中启用。 |
 | `LIGHTBWS_MASTER_KEY` | 自动生成 | 用于加密存储备份凭据的 Base64url 或十六进制 32 字节密钥。 |
 | `RUST_LOG` | `lightbws=info,tower_http=info` | 结构化日志过滤器。 |
+
+镜像已经设置 `LIGHTBWS_BIND=0.0.0.0:8080` 和 `LIGHTBWS_DATA_DIR=/data`。原生二进制部署可以覆盖这两个运行时变量；Compose 部署通常应通过 `LIGHTBWS_LISTEN_ADDRESS` 和 `LIGHTBWS_PORT` 调整宿主机映射。
 
 如果未设置 `LIGHTBWS_MASTER_KEY`，LightBWS 会在数据目录创建仅所有者可读的 `master.key`。请将它与 SQLite 数据库一起持久化，否则无法恢复远程备份文件。
 
 ## SDK 和 BWS
 
-LightBWS 保留 upstream fake server 使用的全部路由，并持久化官方 SDK 发送的密文。请在 Web 界面创建机器账号，复制一次性凭据，然后将客户端指向 LightBWS 基础地址。凭据交换会签发随机的一小时 Bearer 令牌，并将摘要写入 SQLite。每次 SDK 请求都会检查令牌是否过期，以及机器账号是否仍处于有效状态。
+LightBWS 实现官方 SDK 使用的 Secrets Manager 路由，并持久化客户端发送的密文。请在 Web 界面创建机器账号，复制一次性凭据，然后将客户端指向 LightBWS 基础地址。凭据交换会签发随机的一小时 Bearer 令牌，并将摘要写入 SQLite。每次 SDK 请求都会检查令牌是否过期，以及机器账号是否仍处于有效状态。
 
-正常部署应使用 Web 界面创建的机器账号。`LIGHTBWS_ENABLE_UPSTREAM_COMPATIBILITY_ACCOUNT` 只用于运行依赖公开固定客户端凭据的 upstream fake-server 测试夹具。它是测试兼容开关，不是生产认证模式。
+正常部署应使用 Web 界面创建的机器账号。`LIGHTBWS_ENABLE_UPSTREAM_COMPATIBILITY_ACCOUNT` 只用于运行依赖公开固定客户端凭据的上游 SDK 测试夹具。它是测试兼容开关，不是生产认证模式。
 
 ```bash
 export BWS_ACCESS_TOKEN='0.<client-id>.<client-secret>:X8vbvA0bduihIDe/qrzIQQ=='
@@ -199,4 +213,4 @@ git push origin main
 git push origin v0.1.0
 ```
 
-Docker 工作流会向 `ghcr.io/ca-x/lightbws` 发布 `linux/amd64` 和 `linux/arm64` 镜像。每个发布压缩包包含二进制、两种语言的 README 和许可证，并提供独立的 SHA-256 校验文件。前端文件已经嵌入二进制。
+Docker 工作流会在 GitHub 原生 Runner 上分别构建 `linux/amd64` 和 `linux/arm64`，再将相同的多架构标签发布到 `ghcr.io/ca-x/lightbws` 和 `docker.io/czyt/lightbws`。仓库或组织需要提供 `DOCKERHUB_USERNAME` 和 `DOCKERHUB_TOKEN` 两个 secret。每个发布压缩包包含二进制、两种语言的 README 和许可证，并提供独立的 SHA-256 校验文件。前端文件已经嵌入二进制。
