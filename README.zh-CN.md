@@ -28,6 +28,13 @@ LightBWS 适合为服务注入数据库连接地址、向 GitHub Actions 提供 
 
 ![LightBWS 审计日志保留策略](screenshoot/audit-zh.png)
 
+### 移动端
+
+<p align="center">
+  <img src="screenshoot/login-mobile-zh.png" width="360" alt="LightBWS 移动端登录界面">
+  <img src="screenshoot/dashboard-mobile-zh.png" width="360" alt="LightBWS 移动端控制台">
+</p>
+
 ## 功能
 
 - 使用 SQLite 持久化数据，启用 WAL、外键和并发访问保护。

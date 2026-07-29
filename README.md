@@ -28,6 +28,13 @@ Use LightBWS for workloads such as injecting a database URL into a service, supp
 
 ![LightBWS audit retention](screenshoot/audit-en.png)
 
+### Mobile
+
+<p align="center">
+  <img src="screenshoot/login-mobile-en.png" width="360" alt="LightBWS mobile login">
+  <img src="screenshoot/dashboard-mobile-en.png" width="360" alt="LightBWS mobile dashboard">
+</p>
+
 ## Features
 
 - Persistent SQLite database with WAL, foreign keys, and safe concurrent access.
