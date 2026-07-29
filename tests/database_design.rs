@@ -55,6 +55,7 @@ async fn schema_contains_every_record_table_and_supporting_structure() {
             "backup_targets",
             "group_members",
             "groups",
+            "machine_access_tokens",
             "machine_accounts",
             "machine_group_grants",
             "machine_sessions",
@@ -121,6 +122,41 @@ async fn schema_contains_every_record_table_and_supporting_structure() {
         .try_get::<i64>("", "count")
         .expect("structure count");
     assert_eq!(structure_count, 7);
+}
+
+#[tokio::test]
+async fn purging_a_project_preserves_its_secrets_as_unassigned() {
+    let (_data, db) = database().await;
+    let projects = ProjectRepository::new(db.clone());
+    let project = projects
+        .create_plain("Disposable project")
+        .await
+        .expect("project");
+    let secrets = SecretRepository::new(db);
+    let secret = secrets
+        .create_plain("PRESERVED", "value", "", project.id)
+        .await
+        .expect("secret");
+    let sdk_secret = secrets
+        .create_cipher(
+            "cipher-key".into(),
+            "cipher-value".into(),
+            "cipher-note".into(),
+            project.id,
+        )
+        .await
+        .expect("SDK secret");
+
+    projects.purge(project.id).await.expect("purge project");
+
+    let preserved = secrets.get(secret.id).await.expect("preserved secret");
+    assert_eq!(preserved.project_id, None);
+    assert!(
+        secrets
+            .get(Uuid::parse_str(&sdk_secret.id).expect("SDK secret id"))
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -222,9 +258,9 @@ async fn every_table_enforces_its_storage_invariants() {
     assert_rejected(
         &db,
         format!(
-            "INSERT INTO machine_sessions (id, machine_account_id, expires_at, created_at) VALUES ('{}', '{}', 10, 10)",
+            "INSERT INTO machine_sessions (id, machine_access_token_id, expires_at, created_at) VALUES ('{}', '{}', 10, 10)",
             "c".repeat(64),
-            machine.id
+            Uuid::new_v4()
         ),
     )
     .await;

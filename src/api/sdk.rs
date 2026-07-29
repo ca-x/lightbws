@@ -17,7 +17,7 @@ use crate::{
         ORGANIZATION_ID,
         access::{AccessPolicyInput, AccessRepository, GrantInput, Permission},
         audit::{AuditActor, AuditRepository},
-        machines::{MachineAccount, MachineRepository, SDK_SESSION_TTL_SECONDS},
+        machines::{MachineAccount, MachineRepository},
         projects::ProjectRepository,
         secrets::SecretRepository,
     },
@@ -134,7 +134,7 @@ async fn token(
         return Err(AppError::Unauthorized);
     }
     let repository = MachineRepository::new(state.db.clone());
-    let machine = repository
+    let credential = repository
         .authenticate(
             payload.client_id.as_deref().ok_or(AppError::Unauthorized)?,
             payload
@@ -143,7 +143,8 @@ async fn token(
                 .ok_or(AppError::Unauthorized)?,
         )
         .await?;
-    let session_token = repository.create_session(machine.id).await?;
+    let (session_token, expires_at) = repository.create_session(&credential).await?;
+    let machine = credential.account;
     record_machine_event(
         &state,
         &machine,
@@ -154,8 +155,8 @@ async fn token(
     )
     .await?;
     Ok(Json(TokenResponse {
-        access_token: session_jwt(&session_token, machine.client_id),
-        expires_in: u64::try_from(SDK_SESSION_TTL_SECONDS).expect("positive SDK session TTL"),
+        access_token: session_jwt(&session_token, machine.client_id, expires_at),
+        expires_in: u64::try_from(expires_at - crate::domain::now()).unwrap_or(0),
         refresh_token: None,
         token_type: "Bearer",
         scope: "api.secrets",
@@ -163,11 +164,11 @@ async fn token(
     }))
 }
 
-fn session_jwt(session_token: &str, client_id: Uuid) -> String {
+fn session_jwt(session_token: &str, client_id: Uuid, expires_at: i64) -> String {
     let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"none","typ":"JWT"}"#);
     let payload = json!({
         "nbf": crate::domain::now(),
-        "exp": crate::domain::now() + SDK_SESSION_TTL_SECONDS,
+        "exp": expires_at,
         "iss": "lightbws",
         "client_id": client_id,
         "sub": session_token,
@@ -361,7 +362,8 @@ async fn identifiers(
         if !access.machine_secret(machine, &model).await?.read {
             continue;
         }
-        let project_id = Uuid::parse_str(&model.project_id).map_err(AppError::internal)?;
+        let project_id = Uuid::parse_str(model.project_id.as_deref().ok_or(AppError::NotFound)?)
+            .map_err(AppError::internal)?;
         let project = ProjectRepository::new(state.db.clone())
             .get(project_id)
             .await?;
@@ -457,7 +459,7 @@ async fn update_secret(
         .await?
         .require_write()?;
     let project_id = required_project(input.project_ids)?;
-    if existing.project_id != project_id.to_string() {
+    if existing.project_id != Some(project_id.to_string()) {
         AccessRepository::new(state.db.clone())
             .machine_project(&auth.machine, project_id)
             .await?

@@ -193,16 +193,6 @@ impl AccessRepository {
         if role == Role::Admin {
             return Ok(Permission::FULL);
         }
-        let project_id = Uuid::parse_str(&model.project_id).map_err(AppError::internal)?;
-        if project::Entity::find_by_id(project_id.to_string())
-            .filter(project::Column::DeletedAt.is_null())
-            .one(self.db.connection())
-            .await?
-            .is_none()
-        {
-            return Ok(Permission::default());
-        }
-        let project = self.user_project(user_id, role, project_id).await?;
         let direct = permission_query(
             self.db.connection(),
             r#"
@@ -227,7 +217,22 @@ impl AccessRepository {
             ],
         )
         .await?;
-        Ok(project.combine(direct))
+        let inherited = if let Some(project_id) = &model.project_id {
+            let project_id = Uuid::parse_str(project_id).map_err(AppError::internal)?;
+            if project::Entity::find_by_id(project_id.to_string())
+                .filter(project::Column::DeletedAt.is_null())
+                .one(self.db.connection())
+                .await?
+                .is_some()
+            {
+                self.user_project(user_id, role, project_id).await?
+            } else {
+                return Ok(Permission::default());
+            }
+        } else {
+            Permission::default()
+        };
+        Ok(inherited.combine(direct))
     }
 
     pub async fn machine_secret(
@@ -235,16 +240,6 @@ impl AccessRepository {
         machine: &MachineAccount,
         model: &secret::Model,
     ) -> Result<Permission, AppError> {
-        let project_id = Uuid::parse_str(&model.project_id).map_err(AppError::internal)?;
-        if project::Entity::find_by_id(project_id.to_string())
-            .filter(project::Column::DeletedAt.is_null())
-            .one(self.db.connection())
-            .await?
-            .is_none()
-        {
-            return Ok(Permission::default());
-        }
-        let project = self.machine_project(machine, project_id).await?;
         let direct = permission_query(
             self.db.connection(),
             r#"
@@ -256,7 +251,22 @@ impl AccessRepository {
             [model.id.clone().into(), machine.id.to_string().into()],
         )
         .await?;
-        Ok(project.combine(direct))
+        let inherited = if let Some(project_id) = &model.project_id {
+            let project_id = Uuid::parse_str(project_id).map_err(AppError::internal)?;
+            if project::Entity::find_by_id(project_id.to_string())
+                .filter(project::Column::DeletedAt.is_null())
+                .one(self.db.connection())
+                .await?
+                .is_some()
+            {
+                self.machine_project(machine, project_id).await?
+            } else {
+                return Ok(Permission::default());
+            }
+        } else {
+            Permission::default()
+        };
+        Ok(inherited.combine(direct))
     }
 
     pub async fn machine_has_any_write(&self, machine: &MachineAccount) -> Result<bool, AppError> {

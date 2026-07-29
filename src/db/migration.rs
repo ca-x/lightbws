@@ -131,7 +131,7 @@ impl MigrationTrait for InitialMigration {
                 CREATE INDEX idx_projects_org_deleted_updated ON projects(organization_id, deleted_at, updated_at DESC);
                 CREATE TABLE secrets (
                     id TEXT PRIMARY KEY NOT NULL,
-                    project_id TEXT NOT NULL,
+                    project_id TEXT,
                     key_cipher TEXT,
                     value_cipher TEXT,
                     note_cipher TEXT,
@@ -143,11 +143,12 @@ impl MigrationTrait for InitialMigration {
                     updated_at BIGINT NOT NULL,
                     revision_nanos BIGINT NOT NULL,
                     CHECK(length(id) = 36),
-                    CHECK(length(project_id) = 36),
+                    CHECK(project_id IS NULL OR length(project_id) = 36),
                     CHECK ((key_cipher IS NOT NULL AND value_cipher IS NOT NULL AND note_cipher IS NOT NULL
                             AND key_plain IS NULL AND value_plain IS NULL AND note_plain IS NULL)
                         OR (key_cipher IS NULL AND value_cipher IS NULL AND note_cipher IS NULL
                             AND key_plain IS NOT NULL AND value_plain IS NOT NULL AND note_plain IS NOT NULL)),
+                    CHECK(key_cipher IS NULL OR project_id IS NOT NULL),
                     CHECK(key_cipher IS NULL OR length(key_cipher) BETWEEN 1 AND 32768),
                     CHECK(value_cipher IS NULL OR length(value_cipher) BETWEEN 1 AND 2097152),
                     CHECK(note_cipher IS NULL OR length(note_cipher) <= 131072),
@@ -158,7 +159,7 @@ impl MigrationTrait for InitialMigration {
                     CHECK(updated_at >= created_at),
                     CHECK(deleted_at IS NULL OR deleted_at BETWEEN created_at AND updated_at),
                     CHECK(revision_nanos >= 0),
-                    CONSTRAINT fk_secret_project FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+                    CONSTRAINT fk_secret_project FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE SET NULL
                 );
                 CREATE INDEX idx_secrets_deleted_updated ON secrets(deleted_at, updated_at DESC);
                 CREATE INDEX idx_secrets_project_deleted_updated ON secrets(project_id, deleted_at, updated_at DESC);
@@ -167,7 +168,6 @@ impl MigrationTrait for InitialMigration {
                     id TEXT PRIMARY KEY NOT NULL,
                     name VARCHAR(128) NOT NULL COLLATE NOCASE UNIQUE,
                     client_id TEXT NOT NULL UNIQUE,
-                    client_secret_digest TEXT NOT NULL,
                     created_by TEXT NOT NULL,
                     last_used_at BIGINT,
                     revoked_at BIGINT,
@@ -176,7 +176,6 @@ impl MigrationTrait for InitialMigration {
                     CHECK(length(id) = 36),
                     CHECK(length(name) BETWEEN 1 AND 128 AND name = trim(name)),
                     CHECK(length(client_id) = 36),
-                    CHECK(length(client_secret_digest) = 64),
                     CHECK(length(created_by) = 36),
                     CHECK(compatibility_account IN (0, 1)),
                     CHECK(created_at >= 0),
@@ -186,17 +185,43 @@ impl MigrationTrait for InitialMigration {
                 );
                 CREATE UNIQUE INDEX idx_machine_accounts_one_compatibility
                 ON machine_accounts(compatibility_account) WHERE compatibility_account = 1;
-                CREATE TABLE machine_sessions (
+                CREATE TABLE machine_access_tokens (
                     id TEXT PRIMARY KEY NOT NULL,
                     machine_account_id TEXT NOT NULL,
+                    name VARCHAR(128) NOT NULL COLLATE NOCASE,
+                    secret_digest TEXT NOT NULL,
+                    expires_at BIGINT,
+                    last_used_at BIGINT,
+                    revoked_at BIGINT,
+                    created_at BIGINT NOT NULL,
+                    CHECK(length(id) = 36),
+                    CHECK(length(machine_account_id) = 36),
+                    CHECK(length(name) BETWEEN 1 AND 128 AND name = trim(name)),
+                    CHECK(length(secret_digest) = 64),
+                    CHECK(created_at >= 0),
+                    CHECK(expires_at IS NULL OR expires_at > created_at),
+                    CHECK(last_used_at IS NULL OR last_used_at >= created_at),
+                    CHECK(revoked_at IS NULL OR revoked_at >= created_at),
+                    CONSTRAINT fk_machine_access_token_account FOREIGN KEY(machine_account_id) REFERENCES machine_accounts(id) ON DELETE CASCADE
+                );
+                CREATE UNIQUE INDEX idx_machine_access_tokens_account_name_active
+                ON machine_access_tokens(machine_account_id, name) WHERE revoked_at IS NULL;
+                CREATE UNIQUE INDEX idx_machine_access_tokens_account_digest
+                ON machine_access_tokens(machine_account_id, secret_digest);
+                CREATE INDEX idx_machine_access_tokens_account_status
+                ON machine_access_tokens(machine_account_id, revoked_at, expires_at, created_at DESC);
+                CREATE TABLE machine_sessions (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    machine_access_token_id TEXT NOT NULL,
                     expires_at BIGINT NOT NULL,
                     created_at BIGINT NOT NULL,
                     CHECK(length(id) = 64),
+                    CHECK(length(machine_access_token_id) = 36),
                     CHECK(created_at >= 0),
                     CHECK(expires_at > created_at),
-                    CONSTRAINT fk_machine_session_account FOREIGN KEY(machine_account_id) REFERENCES machine_accounts(id) ON DELETE CASCADE
+                    CONSTRAINT fk_machine_session_access_token FOREIGN KEY(machine_access_token_id) REFERENCES machine_access_tokens(id) ON DELETE CASCADE
                 );
-                CREATE INDEX idx_machine_sessions_account_expiry ON machine_sessions(machine_account_id, expires_at);
+                CREATE INDEX idx_machine_sessions_token_expiry ON machine_sessions(machine_access_token_id, expires_at);
                 CREATE INDEX idx_machine_sessions_expiry ON machine_sessions(expires_at);
                 CREATE TABLE groups (
                     id TEXT PRIMARY KEY NOT NULL,
@@ -499,6 +524,7 @@ impl MigrationTrait for InitialMigration {
                 DROP TABLE IF EXISTS group_members;
                 DROP TABLE IF EXISTS groups;
                 DROP TABLE IF EXISTS machine_sessions;
+                DROP TABLE IF EXISTS machine_access_tokens;
                 DROP TABLE IF EXISTS machine_accounts;
                 DROP TABLE IF EXISTS secrets;
                 DROP TABLE IF EXISTS projects;

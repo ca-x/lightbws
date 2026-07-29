@@ -72,8 +72,8 @@ pub fn validate_username(value: &str) -> Result<&str> {
 }
 
 pub fn validate_password(value: &str) -> Result<&str> {
-    if !(8..=4096).contains(&value.chars().count()) || value.chars().any(char::is_control) {
-        bail!("administrator password must contain 8-4096 non-control characters");
+    if !(6..=4096).contains(&value.chars().count()) || value.chars().any(char::is_control) {
+        bail!("administrator password must contain 6-4096 non-control characters");
     }
     Ok(value)
 }
@@ -124,7 +124,7 @@ mod tests {
         assert_eq!(validate_username(" admin ").unwrap(), "admin");
         assert!(validate_username("").is_err());
         assert!(validate_username("bad\nname").is_err());
-        assert!(validate_password("password-123").is_ok());
-        assert!(validate_password("short").is_err());
+        assert!(validate_password("123456").is_ok());
+        assert!(validate_password("12345").is_err());
     }
 }

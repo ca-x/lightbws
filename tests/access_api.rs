@@ -127,6 +127,73 @@ async fn web_users_receive_group_and_direct_secret_permissions_without_admin_acc
     assert_eq!(hidden_secret.status(), StatusCode::FORBIDDEN);
 
     let (admin_cookies, admin_csrf) = fixture.login("admin").await;
+    let unassigned = fixture
+        .request(json_request(
+            Method::POST,
+            "/api/v1/secrets",
+            Some(json!({
+                "key": "GLOBAL_TOKEN",
+                "value": "global",
+                "note": "not bound to a project",
+                "projectId": null
+            })),
+            Some(&admin_cookies),
+            Some(&admin_csrf),
+        ))
+        .await;
+    assert_eq!(unassigned.status(), StatusCode::CREATED);
+    let unassigned = response_json(unassigned).await;
+    assert_eq!(unassigned["projectId"], Value::Null);
+    let unassigned_id = unassigned["id"].as_str().unwrap();
+    let unassigned_create_denied = fixture
+        .request(json_request(
+            Method::POST,
+            "/api/v1/secrets",
+            Some(json!({
+                "key": "DENIED_GLOBAL",
+                "value": "denied",
+                "note": "",
+                "projectId": null
+            })),
+            Some(&member_cookies),
+            Some(&member_csrf),
+        ))
+        .await;
+    assert_eq!(unassigned_create_denied.status(), StatusCode::FORBIDDEN);
+    let unassigned_policy = fixture
+        .request(json_request(
+            Method::PUT,
+            &format!("/api/v1/secrets/{unassigned_id}/access"),
+            Some(json!({
+                "users": [{ "granteeId": fixture.member_id, "read": true, "write": true }],
+                "groups": [],
+                "machines": []
+            })),
+            Some(&admin_cookies),
+            Some(&admin_csrf),
+        ))
+        .await;
+    assert_eq!(unassigned_policy.status(), StatusCode::OK);
+    let unassigned_update = fixture
+        .request(json_request(
+            Method::PUT,
+            &format!("/api/v1/secrets/{unassigned_id}"),
+            Some(json!({
+                "key": "GLOBAL_TOKEN",
+                "value": "updated-global",
+                "note": "direct grant",
+                "projectId": null
+            })),
+            Some(&member_cookies),
+            Some(&member_csrf),
+        ))
+        .await;
+    assert_eq!(unassigned_update.status(), StatusCode::OK);
+    assert_eq!(
+        response_json(unassigned_update).await["projectId"],
+        Value::Null
+    );
+
     let group = fixture
         .request(json_request(
             Method::POST,
@@ -257,6 +324,44 @@ async fn web_users_receive_group_and_direct_secret_permissions_without_admin_acc
     let machine_access = response_json(machine_access).await;
     assert_eq!(machine_access["users"][0]["granteeId"], fixture.member_id);
     assert_eq!(machine_access["projects"][0]["write"], true);
+    let machine_token = fixture
+        .request(json_request(
+            Method::POST,
+            &format!("/api/v1/admin/machines/{machine_id}/tokens"),
+            Some(json!({ "name": "CI", "expiresAt": null })),
+            Some(&admin_cookies),
+            Some(&admin_csrf),
+        ))
+        .await;
+    assert_eq!(machine_token.status(), StatusCode::CREATED);
+    let machine_token_id = response_json(machine_token).await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let revoked_token = fixture
+        .request(json_request(
+            Method::PUT,
+            &format!("/api/v1/admin/machines/{machine_id}/tokens/{machine_token_id}/revoke"),
+            None,
+            Some(&admin_cookies),
+            Some(&admin_csrf),
+        ))
+        .await;
+    assert_eq!(revoked_token.status(), StatusCode::OK);
+    let machine_events = fixture
+        .request(json_request(
+            Method::GET,
+            &format!("/api/v1/admin/machines/{machine_id}/events"),
+            None,
+            Some(&admin_cookies),
+            None,
+        ))
+        .await;
+    assert_eq!(machine_events.status(), StatusCode::OK);
+    let machine_events = response_json(machine_events).await;
+    assert!(machine_events.as_array().unwrap().iter().any(|event| {
+        event["action"] == "machine.token.revoke" && event["resourceId"] == machine_token_id
+    }));
 
     let project_admin_denied = fixture
         .request(json_request(

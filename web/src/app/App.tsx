@@ -4,17 +4,17 @@ import { Card } from "@astryxdesign/core/Card"
 import { IconButton } from "@astryxdesign/core/IconButton"
 import { Tooltip } from "@astryxdesign/core/Tooltip"
 import {
-  ArchiveRestore, Boxes, Check, ChevronRight, CircleGauge, CloudUpload, Copy, DatabaseBackup,
+  ArchiveRestore, Boxes, Check, ChevronRight, CircleGauge, Clock3, CloudUpload, Copy, DatabaseBackup,
   ExternalLink, FileDown, FileUp, FolderKanban, Globe2, Info, KeyRound, Languages, LogOut, Menu,
-  Monitor, Moon, Network, Pencil, Plus, RefreshCw, Search, ServerCog, Settings, ShieldCheck,
+  Monitor, Moon, Network, Pencil, Plus, RefreshCw, ScrollText, Search, ServerCog, Settings, ShieldCheck,
   Sun, Trash2, UserCog, UsersRound, X,
 } from "lucide-react"
-import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react"
 
 import { ApiError, api } from "./api"
 import type {
   AccessPolicy, AuditEvent, AuditSettings, BackupCapabilities, BackupConfig, BackupEncryption, BackupJob, BackupScopes, BackupTarget, GrantInput, Group,
-  IssuedMachineAccount, Locale, MachineAccount, NamedGrant, Overview, Project, Role,
+  IssuedMachineAccessToken, IssuedMachineAccount, Locale, MachineAccessToken, MachineAccount, NamedGrant, Overview, Project, Role,
   Secret, Session, ThemeMode, User,
 } from "./types"
 import { useI18n } from "../i18n/I18nProvider"
@@ -35,14 +35,35 @@ type AccessSection = { key: GrantBucketKey; label: string; items: Array<{ id: st
 export function App() {
   const [session, setSession] = useState<Session | null>(null)
   const [loading, setLoading] = useState(true)
+  const postLoginRoute = useRef(location.pathname === "/login" ? "/" : `${location.pathname}${location.search}${location.hash}`)
 
   useEffect(() => {
-    api.session().then(setSession).catch(() => setSession(null)).finally(() => setLoading(false))
+    api.session()
+      .then((current) => {
+        setSession(current)
+        if (location.pathname === "/login") history.replaceState(null, "", "/")
+      })
+      .catch(() => {
+        setSession(null)
+        if (location.pathname !== "/login") history.replaceState(null, "", "/login")
+      })
+      .finally(() => setLoading(false))
   }, [])
 
+  function authenticated(current: Session) {
+    history.replaceState(null, "", postLoginRoute.current)
+    setSession(current)
+  }
+
+  function signedOut() {
+    postLoginRoute.current = `${location.pathname}${location.search}${location.hash}`
+    history.replaceState(null, "", "/login")
+    setSession(null)
+  }
+
   if (loading) return <LoadingScreen />
-  if (!session) return <LoginPage onAuthenticated={setSession} />
-  return <Workspace session={session} onSignedOut={() => setSession(null)} />
+  if (!session) return <LoginPage onAuthenticated={authenticated} />
+  return <Workspace session={session} onSignedOut={signedOut} />
 }
 
 function LoadingScreen() {
@@ -259,8 +280,8 @@ function SecretsPage({ isAdmin, notify }: { isAdmin: boolean; notify: (text: str
   const load = useCallback(() => Promise.all([api.secrets(), api.projects()]).then(([secrets, projects]) => { setItems(secrets); setProjects(projects) }).catch(() => notify(t("genericError"), true)), [notify, t])
   useEffect(() => { void load() }, [load])
   const filtered = items.filter((item) => `${item.key} ${item.note}`.toLowerCase().includes(query.toLowerCase()))
-  const canCreate = projects.some((project) => project.permissions.write)
-  async function save(input: { key: string; value: string; note: string; projectId: string }) {
+  const canCreate = isAdmin || projects.some((project) => project.permissions.write)
+  async function save(input: { key: string; value: string; note: string; projectId: string | null }) {
     try { editing === "new" ? await api.createSecret(input) : editing && await api.updateSecret(editing.id, input); setEditing(null); await load() }
     catch { notify(t("genericError"), true) }
   }
@@ -270,32 +291,92 @@ function SecretsPage({ isAdmin, notify }: { isAdmin: boolean; notify: (text: str
     <ListToolbar query={query} onQuery={setQuery} />
     <DataPanel empty={!filtered.length} onEmptyAction={canCreate ? () => setEditing("new") : undefined}>
       <table><thead><tr><th>{t("secretKey")}</th><th>{t("secretValue")}</th><th>{t("project")}</th><th>{t("permission")}</th><th>{t("lastUpdated")}</th><th className="action-column">{t("actions")}</th></tr></thead>
-        <tbody>{filtered.map((item) => <tr key={item.id}><td><div className="title-cell"><span className="row-icon"><KeyRound /></span><div><strong>{item.key}</strong>{item.sdkEncrypted && <small>{t("encryptedSdk")}</small>}</div></div></td><td><code className="secret-value">{item.value === null ? "••••••••" : revealed.has(item.id) ? item.value : "••••••••••••"}</code></td><td>{projects.find((project) => project.id === item.projectId)?.name || "—"}</td><td><StatusPill value={item.permissions.write ? "readWrite" : "readOnly"} /></td><td>{formatDate(item.updatedAt)}</td><td><RowActions>{item.value !== null && <IconButton variant="ghost" label={t("secretValue")} icon={<KeyRound />} onClick={() => setRevealed((current) => { const next = new Set(current); next.has(item.id) ? next.delete(item.id) : next.add(item.id); return next })} />}{item.value !== null && <IconButton variant="ghost" label={t("copy")} icon={<Copy />} onClick={() => void copy(item.value || "")} />}{isAdmin && <IconButton variant="ghost" label={t("manageAccess")} icon={<ShieldCheck />} onClick={() => setAccessItem(item)} />}{!item.sdkEncrypted && item.permissions.write && <IconButton variant="ghost" label={t("edit")} icon={<Pencil />} onClick={() => setEditing(item)} />}{item.permissions.write && <IconButton variant="ghost" label={t("delete")} icon={<Trash2 />} onClick={() => void remove(item)} />}</RowActions></td></tr>)}</tbody>
+        <tbody>{filtered.map((item) => <tr key={item.id}><td><div className="title-cell"><span className="row-icon"><KeyRound /></span><div><strong>{item.key}</strong>{item.sdkEncrypted && <small>{t("encryptedSdk")}</small>}</div></div></td><td><code className="secret-value">{item.value === null ? "••••••••" : revealed.has(item.id) ? item.value : "••••••••••••"}</code></td><td>{projects.find((project) => project.id === item.projectId)?.name || t("noProject")}</td><td><StatusPill value={item.permissions.write ? "readWrite" : "readOnly"} /></td><td>{formatDate(item.updatedAt)}</td><td><RowActions>{item.value !== null && <IconButton variant="ghost" label={t("secretValue")} icon={<KeyRound />} onClick={() => setRevealed((current) => { const next = new Set(current); next.has(item.id) ? next.delete(item.id) : next.add(item.id); return next })} />}{item.value !== null && <IconButton variant="ghost" label={t("copy")} icon={<Copy />} onClick={() => void copy(item.value || "")} />}{isAdmin && <IconButton variant="ghost" label={t("manageAccess")} icon={<ShieldCheck />} onClick={() => setAccessItem(item)} />}{!item.sdkEncrypted && item.permissions.write && <IconButton variant="ghost" label={t("edit")} icon={<Pencil />} onClick={() => setEditing(item)} />}{item.permissions.write && <IconButton variant="ghost" label={t("delete")} icon={<Trash2 />} onClick={() => void remove(item)} />}</RowActions></td></tr>)}</tbody>
       </table>
     </DataPanel>
-    {editing && <SecretDialog item={editing === "new" ? null : editing} projects={projects} onClose={() => setEditing(null)} onSave={save} />}
+    {editing && <SecretDialog item={editing === "new" ? null : editing} projects={projects} allowUnassigned={isAdmin || (editing !== "new" && editing.projectId === null)} onClose={() => setEditing(null)} onSave={save} />}
     {isAdmin && accessItem && <ResourceAccessDialog resource={{ kind: "secret", id: accessItem.id, name: accessItem.key }} onClose={() => setAccessItem(null)} notify={notify} />}
   </div>
 }
 
-function SecretDialog({ item, projects, onClose, onSave }: { item: Secret | null; projects: Project[]; onClose: () => void; onSave: (input: { key: string; value: string; note: string; projectId: string }) => Promise<void> }) {
+function SecretDialog({ item, projects, allowUnassigned, onClose, onSave }: { item: Secret | null; projects: Project[]; allowUnassigned: boolean; onClose: () => void; onSave: (input: { key: string; value: string; note: string; projectId: string | null }) => Promise<void> }) {
   const { t } = useI18n(); const allowedProjects = projects.filter((project) => project.permissions.write || project.id === item?.projectId); const [key, setKey] = useState(item?.key || ""); const [value, setValue] = useState(item?.value || ""); const [note, setNote] = useState(item?.note || ""); const [projectId, setProjectId] = useState(item?.projectId || allowedProjects[0]?.id || ""); const [busy, setBusy] = useState(false)
-  async function submit(event: FormEvent) { event.preventDefault(); if (!key.trim() || !projectId) return; setBusy(true); await onSave({ key, value, note, projectId }); setBusy(false) }
-  return <Modal title={`${item ? t("edit") : t("new")} ${t("secret")}`} onClose={onClose} wide><form className="form-stack" onSubmit={submit}><div className="form-grid"><Field label={t("secretKey")} value={key} onChange={setKey} autoFocus /><Field label={t("secretValue")} value={value} onChange={setValue} /></div><TextArea label={t("note")} value={note} onChange={setNote} /><SelectField label={t("project")} value={projectId} onChange={setProjectId} options={allowedProjects.map((project) => ({ value: project.id, label: project.name }))} /><DialogActions onClose={onClose} busy={busy} disabled={!key.trim() || !projectId} /></form></Modal>
+  async function submit(event: FormEvent) { event.preventDefault(); if (!key.trim() || (!projectId && !allowUnassigned)) return; setBusy(true); await onSave({ key, value, note, projectId: projectId || null }); setBusy(false) }
+  const projectOptions = [...(allowUnassigned ? [{ value: "", label: t("noProject") }] : []), ...allowedProjects.map((project) => ({ value: project.id, label: project.name }))]
+  return <Modal title={`${item ? t("edit") : t("new")} ${t("secret")}`} onClose={onClose} wide><form className="form-stack" onSubmit={submit}><div className="form-grid"><Field label={t("secretKey")} value={key} onChange={setKey} autoFocus /><Field label={t("secretValue")} value={value} onChange={setValue} /></div><TextArea label={t("note")} value={note} onChange={setNote} /><SelectField label={t("project")} value={projectId} onChange={setProjectId} options={projectOptions} /><DialogActions onClose={onClose} busy={busy} disabled={!key.trim() || (!projectId && !allowUnassigned)} /></form></Modal>
 }
 
 function MachinesPage({ notify }: { notify: (text: string, error?: boolean) => void }) {
-  const { t } = useI18n(); const [items, setItems] = useState<MachineAccount[]>([]); const [creating, setCreating] = useState(false); const [issued, setIssued] = useState<IssuedMachineAccount | null>(null); const [accessItem, setAccessItem] = useState<MachineAccount | null>(null)
+  const { t } = useI18n(); const [items, setItems] = useState<MachineAccount[]>([]); const [creating, setCreating] = useState(false); const [issued, setIssued] = useState<IssuedMachineAccount | null>(null); const [accessItem, setAccessItem] = useState<MachineAccount | null>(null); const [operationsItem, setOperationsItem] = useState<MachineAccount | null>(null)
   const load = useCallback(() => api.machines().then(setItems).catch(() => notify(t("genericError"), true)), [notify, t]); useEffect(() => { void load() }, [load])
   async function create(name: string) { try { const value = await api.createMachine(name); setCreating(false); setIssued(value); load() } catch { notify(t("genericError"), true) } }
   async function toggle(item: MachineAccount) { try { await api.setMachineRevoked(item.id, !item.revokedAt); load() } catch { notify(t("genericError"), true) } }
   async function remove(item: MachineAccount) { try { await api.deleteMachine(item.id); load() } catch { notify(t("genericError"), true) } }
-  return <div className="page"><PageHeader title={t("machines")} action={<Button variant="primary" icon={<Plus />} label={`${t("new")} ${t("machineAccount")}`} onClick={() => setCreating(true)} />} /><DataPanel empty={!items.length} onEmptyAction={() => setCreating(true)}><table><thead><tr><th>{t("machineName")}</th><th>{t("clientId")}</th><th>{t("lastUsed")}</th><th>{t("status")}</th><th className="action-column">{t("actions")}</th></tr></thead><tbody>{items.map((item) => <tr key={item.id}><td><div className="title-cell"><span className="row-icon"><ServerCog /></span><div><strong>{item.name}</strong>{item.compatibilityAccount && <small>{t("compatibilityAccount")}</small>}</div></div></td><td><code>{item.clientId}</code></td><td>{item.lastUsedAt ? formatDate(item.lastUsedAt) : t("never")}</td><td><StatusPill value={item.revokedAt ? "revoked" : "active"} /></td><td><RowActions>{!item.compatibilityAccount && <IconButton variant="ghost" label={t("manageAccess")} icon={<ShieldCheck />} onClick={() => setAccessItem(item)} />}<Button size="sm" variant="ghost" label={item.revokedAt ? t("enable") : t("revoke")} onClick={() => void toggle(item)} />{!item.compatibilityAccount && <IconButton variant="ghost" label={t("delete")} icon={<Trash2 />} onClick={() => void remove(item)} />}</RowActions></td></tr>)}</tbody></table></DataPanel>{creating && <NameDialog title={`${t("new")} ${t("machineAccount")}`} label={t("machineName")} onClose={() => setCreating(false)} onSave={create} />}{issued && <TokenDialog item={issued} onClose={() => setIssued(null)} notify={notify} />}{accessItem && <ResourceAccessDialog resource={{ kind: "machine", id: accessItem.id, name: accessItem.name }} onClose={() => setAccessItem(null)} notify={notify} />}</div>
+  return <div className="page"><PageHeader title={t("machines")} action={<Button variant="primary" icon={<Plus />} label={`${t("new")} ${t("machineAccount")}`} onClick={() => setCreating(true)} />} /><DataPanel empty={!items.length} onEmptyAction={() => setCreating(true)}><table><thead><tr><th>{t("machineName")}</th><th>{t("clientId")}</th><th>{t("lastUsed")}</th><th>{t("status")}</th><th className="action-column">{t("actions")}</th></tr></thead><tbody>{items.map((item) => <tr key={item.id}><td><div className="title-cell"><span className="row-icon"><ServerCog /></span><div><strong>{item.name}</strong>{item.compatibilityAccount && <small>{t("compatibilityAccount")}</small>}</div></div></td><td><code>{item.clientId}</code></td><td>{item.lastUsedAt ? formatDate(item.lastUsedAt) : t("never")}</td><td><StatusPill value={item.revokedAt ? "revoked" : "active"} /></td><td><RowActions>{!item.compatibilityAccount && <IconButton variant="ghost" label={t("credentialsAndEvents")} icon={<KeyRound />} onClick={() => setOperationsItem(item)} />}{!item.compatibilityAccount && <IconButton variant="ghost" label={t("manageAccess")} icon={<ShieldCheck />} onClick={() => setAccessItem(item)} />}<Button size="sm" variant="ghost" label={item.revokedAt ? t("enable") : t("revoke")} onClick={() => void toggle(item)} />{!item.compatibilityAccount && <IconButton variant="ghost" label={t("delete")} icon={<Trash2 />} onClick={() => void remove(item)} />}</RowActions></td></tr>)}</tbody></table></DataPanel>{creating && <NameDialog title={`${t("new")} ${t("machineAccount")}`} label={t("machineName")} onClose={() => setCreating(false)} onSave={create} />}{issued && <TokenDialog item={issued} onClose={() => setIssued(null)} notify={notify} />}{accessItem && <ResourceAccessDialog resource={{ kind: "machine", id: accessItem.id, name: accessItem.name }} onClose={() => setAccessItem(null)} notify={notify} />}{operationsItem && <MachineOperationsDialog machine={operationsItem} onClose={() => setOperationsItem(null)} notify={notify} />}</div>
 }
 
-function TokenDialog({ item, onClose, notify }: { item: IssuedMachineAccount; onClose: () => void; notify: (text: string) => void }) {
+function TokenDialog({ item, onClose, notify }: { item: IssuedMachineAccount | IssuedMachineAccessToken; onClose: () => void; notify: (text: string) => void }) {
   const { t } = useI18n(); async function copy() { await navigator.clipboard.writeText(item.accessToken); notify(t("copied")) }
   return <Modal title={t("accessToken")} onClose={onClose} wide><Banner status="warning" title={t("tokenOneTime")} /><div className="token-box"><code>{item.accessToken}</code><IconButton variant="ghost" label={t("copy")} icon={<Copy />} onClick={() => void copy()} /></div><div className="dialog-actions"><Button variant="primary" label={t("close")} onClick={onClose} /></div></Modal>
+}
+
+function MachineOperationsDialog({ machine, onClose, notify }: { machine: MachineAccount; onClose: () => void; notify: (text: string, error?: boolean) => void }) {
+  const { t } = useI18n()
+  const [tab, setTab] = useState<"tokens" | "events">("tokens")
+  const [tokens, setTokens] = useState<MachineAccessToken[]>([])
+  const [events, setEvents] = useState<AuditEvent[]>([])
+  const [loading, setLoading] = useState(true)
+  const [creating, setCreating] = useState(false)
+  const [issued, setIssued] = useState<IssuedMachineAccessToken | null>(null)
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const [nextTokens, nextEvents] = await Promise.all([api.machineTokens(machine.id), api.machineEvents(machine.id)])
+      setTokens(nextTokens); setEvents(nextEvents)
+    } catch { notify(t("genericError"), true) }
+    finally { setLoading(false) }
+  }, [machine.id, notify, t])
+  useEffect(() => { void load() }, [load])
+  async function create(name: string, expiresAt: number | null) {
+    try { const value = await api.createMachineToken(machine.id, name, expiresAt); setCreating(false); setIssued(value); await load() }
+    catch { notify(t("genericError"), true) }
+  }
+  async function revoke(token: MachineAccessToken) {
+    try { await api.revokeMachineToken(machine.id, token.id); await load() }
+    catch { notify(t("genericError"), true) }
+  }
+  return <>
+    <Modal title={`${t("credentialsAndEvents")} · ${machine.name}`} onClose={onClose} wide>
+      <div className="dialog-tabs" role="tablist" aria-label={t("credentialsAndEvents")}>
+        <button type="button" role="tab" aria-selected={tab === "tokens"} data-active={tab === "tokens"} onClick={() => setTab("tokens")}><KeyRound />{t("accessTokens")}</button>
+        <button type="button" role="tab" aria-selected={tab === "events"} data-active={tab === "events"} onClick={() => setTab("events")}><ScrollText />{t("eventLogs")}</button>
+      </div>
+      {loading ? <div className="access-loading"><RefreshCw /><span>{t("loading")}</span></div> : tab === "tokens" ? <section className="machine-operation-panel" role="tabpanel">
+        <div className="panel-heading"><div><h3>{t("accessTokens")}</h3><p>{t("accessTokensHint")}</p></div><Button variant="secondary" icon={<Plus />} label={t("createAccessToken")} onClick={() => setCreating(true)} /></div>
+        {tokens.length ? <div className="table-scroll"><table><thead><tr><th>{t("tokenName")}</th><th>{t("expires")}</th><th>{t("lastUsed")}</th><th>{t("status")}</th><th className="action-column">{t("actions")}</th></tr></thead><tbody>{tokens.map((token) => { const expired = token.expiresAt !== null && token.expiresAt <= Math.floor(Date.now() / 1000); return <tr key={token.id}><td><strong>{token.name}</strong></td><td>{token.expiresAt ? formatDate(token.expiresAt) : t("never")}</td><td>{token.lastUsedAt ? formatDate(token.lastUsedAt) : t("never")}</td><td><StatusPill value={token.revokedAt ? "revoked" : expired ? "expired" : "active"} /></td><td><RowActions>{!token.revokedAt && <Button size="sm" variant="ghost" label={t("revoke")} onClick={() => void revoke(token)} />}</RowActions></td></tr> })}</tbody></table></div> : <div className="compact-empty"><KeyRound /><p>{t("emptyAccessTokens")}</p></div>}
+      </section> : <section className="machine-operation-panel" role="tabpanel">
+        <div className="panel-heading"><div><h3>{t("eventLogs")}</h3><p>{t("eventLogsHint")}</p></div><IconButton variant="ghost" label={t("refresh")} icon={<RefreshCw />} onClick={() => void load()} /></div>
+        {events.length ? <div className="table-scroll"><table><thead><tr><th>{t("auditAction")}</th><th>{t("resourceId")}</th><th>{t("outcome")}</th><th>{t("time")}</th></tr></thead><tbody>{events.map((event) => <tr key={event.id}><td><code>{event.action}</code></td><td><code>{event.resourceId || "—"}</code></td><td><StatusPill value={event.outcome} /></td><td>{formatDate(event.createdAt)}</td></tr>)}</tbody></table></div> : <div className="compact-empty"><ScrollText /><p>{t("emptyMachineEvents")}</p></div>}
+      </section>}
+    </Modal>
+    {creating && <CreateAccessTokenDialog onClose={() => setCreating(false)} onSave={create} />}
+    {issued && <TokenDialog item={issued} onClose={() => setIssued(null)} notify={notify} />}
+  </>
+}
+
+function CreateAccessTokenDialog({ onClose, onSave }: { onClose: () => void; onSave: (name: string, expiresAt: number | null) => Promise<void> }) {
+  const { t } = useI18n()
+  const [name, setName] = useState("")
+  const [expiry, setExpiry] = useState("never")
+  const [customExpiry, setCustomExpiry] = useState("")
+  const [busy, setBusy] = useState(false)
+  async function submit(event: FormEvent) {
+    event.preventDefault()
+    if (!name.trim() || (expiry === "custom" && !customExpiry)) return
+    const expiresAt = expiry === "never" ? null : expiry === "custom" ? Math.floor(new Date(customExpiry).getTime() / 1000) : Math.floor(Date.now() / 1000) + Number(expiry) * 24 * 60 * 60
+    setBusy(true); await onSave(name, expiresAt); setBusy(false)
+  }
+  return <Modal title={t("createAccessToken")} onClose={onClose}><form className="form-stack" onSubmit={submit}><Field label={t("tokenName")} value={name} onChange={setName} autoFocus /><SelectField label={t("expires")} value={expiry} onChange={setExpiry} options={[{ value: "never", label: t("never") }, { value: "7", label: t("sevenDays") }, { value: "30", label: t("thirtyDays") }, { value: "60", label: t("sixtyDays") }, { value: "custom", label: t("customExpiry") }]} />{expiry === "custom" && <Field label={t("customExpiry")} type="datetime-local" value={customExpiry} onChange={setCustomExpiry} />}<DialogActions onClose={onClose} busy={busy} disabled={!name.trim() || (expiry === "custom" && !customExpiry)} /></form></Modal>
 }
 
 function UsersPage({ currentUser, notify }: { currentUser: User; notify: (text: string, error?: boolean) => void }) {
@@ -309,7 +390,7 @@ function UsersPage({ currentUser, notify }: { currentUser: User; notify: (text: 
 function UserDialog({ item, currentUser, onClose, onSave }: { item: User | null; currentUser: User; onClose: () => void; onSave: (input: { username: string; displayName: string; role: Role; password: string; disabled: boolean }) => Promise<void> }) {
   const { t } = useI18n(); const [username, setUsername] = useState(item?.username || ""); const [displayName, setDisplayName] = useState(item?.displayName || ""); const [password, setPassword] = useState(""); const [role, setRole] = useState<Role>(item?.role || "user"); const [disabled, setDisabled] = useState(item?.disabled || false); const [busy, setBusy] = useState(false); const self = item?.id === currentUser.id
   async function submit(event: FormEvent) { event.preventDefault(); setBusy(true); await onSave({ username, displayName, password, role, disabled }); setBusy(false) }
-  return <Modal title={`${item ? t("edit") : t("new")} ${t("user")}`} onClose={onClose}><form className="form-stack" onSubmit={submit}><Field label={t("username")} value={username} onChange={setUsername} disabled={Boolean(item)} autoFocus /><Field label={t("displayName")} value={displayName} onChange={setDisplayName} />{!item && <Field label={t("password")} value={password} onChange={setPassword} type="password" />}<SelectField label={t("role")} value={role} onChange={(value) => setRole(value as Role)} disabled={self} options={[{ value: "user", label: t("member") }, { value: "admin", label: t("administrator") }]} />{item && <CheckField label={t("disabled")} checked={disabled} onChange={setDisabled} disabled={self} />}<DialogActions onClose={onClose} busy={busy} disabled={!username.trim() || !displayName.trim() || (!item && password.length < 8)} /></form></Modal>
+  return <Modal title={`${item ? t("edit") : t("new")} ${t("user")}`} onClose={onClose}><form className="form-stack" onSubmit={submit}><Field label={t("username")} value={username} onChange={setUsername} disabled={Boolean(item)} autoFocus /><Field label={t("displayName")} value={displayName} onChange={setDisplayName} />{!item && <Field label={t("password")} value={password} onChange={setPassword} type="password" />}<SelectField label={t("role")} value={role} onChange={(value) => setRole(value as Role)} disabled={self} options={[{ value: "user", label: t("member") }, { value: "admin", label: t("administrator") }]} />{item && <CheckField label={t("disabled")} checked={disabled} onChange={setDisabled} disabled={self} />}<DialogActions onClose={onClose} busy={busy} disabled={!username.trim() || !displayName.trim() || (!item && password.length < 6)} /></form></Modal>
 }
 
 function GroupsPage({ notify }: { notify: (text: string, error?: boolean) => void }) {
@@ -568,21 +649,22 @@ function DataPanel({ empty, onEmptyAction, children }: { empty: boolean; onEmpty
 }
 
 function Modal({ title, onClose, wide = false, children }: { title: string; onClose: () => void; wide?: boolean; children: ReactNode }) {
-  useEffect(() => { const key = (event: KeyboardEvent) => { if (event.key === "Escape") onClose() }; addEventListener("keydown", key); return () => removeEventListener("keydown", key) }, [onClose])
+  const backdrop = useRef<HTMLDivElement>(null)
+  useEffect(() => { const key = (event: KeyboardEvent) => { const layers = document.querySelectorAll(".modal-backdrop"); if (event.key === "Escape" && layers.item(layers.length - 1) === backdrop.current) onClose() }; addEventListener("keydown", key); return () => removeEventListener("keydown", key) }, [onClose])
   const { t } = useI18n()
-  return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}><section className="modal" data-wide={wide} role="dialog" aria-modal="true" aria-labelledby="modal-title"><header><h2 id="modal-title">{title}</h2><IconButton variant="ghost" label={t("close")} icon={<X />} onClick={onClose} /></header>{children}</section></div>
+  return <div ref={backdrop} className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}><section className="modal" data-wide={wide} role="dialog" aria-modal="true" aria-labelledby="modal-title"><header><h2 id="modal-title">{title}</h2><IconButton variant="ghost" label={t("close")} icon={<X />} onClick={onClose} /></header>{children}</section></div>
 }
 
 function DialogActions({ onClose, busy, disabled }: { onClose: () => void; busy: boolean; disabled?: boolean }) { const { t } = useI18n(); return <div className="dialog-actions"><Button variant="ghost" label={t("cancel")} onClick={onClose} /><Button type="submit" variant="primary" label={t("save")} isLoading={busy} isDisabled={disabled} /></div> }
 
-function NameDialog({ title, label, type = "text", initialValue = "", onClose, onSave }: { title: string; label: string; type?: string; initialValue?: string; onClose: () => void; onSave: (value: string) => Promise<void> }) { const [value, setValue] = useState(initialValue); const [busy, setBusy] = useState(false); async function submit(event: FormEvent) { event.preventDefault(); setBusy(true); await onSave(value); setBusy(false) } return <Modal title={title} onClose={onClose}><form className="form-stack" onSubmit={submit}><Field label={label} value={value} onChange={setValue} type={type} autoFocus /><DialogActions onClose={onClose} busy={busy} disabled={!value.trim() || (type === "password" && value.length < 8)} /></form></Modal> }
+function NameDialog({ title, label, type = "text", initialValue = "", onClose, onSave }: { title: string; label: string; type?: string; initialValue?: string; onClose: () => void; onSave: (value: string) => Promise<void> }) { const [value, setValue] = useState(initialValue); const [busy, setBusy] = useState(false); async function submit(event: FormEvent) { event.preventDefault(); setBusy(true); await onSave(value); setBusy(false) } return <Modal title={title} onClose={onClose}><form className="form-stack" onSubmit={submit}><Field label={label} value={value} onChange={setValue} type={type} autoFocus /><DialogActions onClose={onClose} busy={busy} disabled={!value.trim() || (type === "password" && value.length < 6)} /></form></Modal> }
 
 function Field({ label, value, onChange, type = "text", placeholder, autoComplete, autoFocus, disabled, hint }: { label: string; value: string; onChange: (value: string) => void; type?: string; placeholder?: string; autoComplete?: string; autoFocus?: boolean; disabled?: boolean; hint?: string }) { return <label className="field"><span>{label}</span><input {...{ type, value, placeholder, autoComplete, autoFocus, disabled }} onChange={(event) => onChange(event.target.value)} />{hint && <small>{hint}</small>}</label> }
 function TextArea({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) { return <label className="field"><span>{label}</span><textarea value={value} onChange={(event) => onChange(event.target.value)} rows={3} /></label> }
 function SelectField({ label, value, onChange, options, disabled }: { label: string; value: string; onChange: (value: string) => void; options: Array<{ value: string; label: string }>; disabled?: boolean }) { return <label className="field"><span>{label}</span><select value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)}>{options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label> }
 function CheckField({ label, checked, onChange, disabled }: { label: string; checked: boolean; onChange: (value: boolean) => void; disabled?: boolean }) { return <label className="check-field"><input type="checkbox" checked={checked} disabled={disabled} onChange={(event) => onChange(event.target.checked)} /><span>{label}</span></label> }
 function RowActions({ children }: { children: ReactNode }) { return <div className="row-actions">{children}</div> }
-function StatusPill({ value }: { value: string }) { const { t } = useI18n(); const key = (["active", "disabled", "revoked", "succeeded", "failed", "running", "allowed", "denied", "changed", "readOnly", "readWrite"] as MessageKey[]).includes(value as MessageKey) ? value as MessageKey : "active"; return <span className="status-pill" data-status={value}><i />{t(key)}</span> }
+function StatusPill({ value }: { value: string }) { const { t } = useI18n(); const key = (["active", "disabled", "revoked", "expired", "succeeded", "failed", "running", "allowed", "denied", "changed", "readOnly", "readWrite"] as MessageKey[]).includes(value as MessageKey) ? value as MessageKey : "active"; return <span className="status-pill" data-status={value}><i />{t(key)}</span> }
 
 function formatDate(value: number) { return new Intl.DateTimeFormat(document.documentElement.lang || "en", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value * 1000)) }
 function grantKey(bucket: GrantBucketKey, id: string) { return `${bucket}:${id}` }

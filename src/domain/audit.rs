@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use sea_orm::{
-    ColumnTrait, ConnectionTrait, DatabaseBackend, EntityTrait, QueryFilter, QueryOrder,
+    ColumnTrait, Condition, ConnectionTrait, DatabaseBackend, EntityTrait, QueryFilter, QueryOrder,
     QuerySelect, Statement, TransactionTrait, sea_query::Expr,
 };
 use serde::{Deserialize, Serialize};
@@ -10,7 +10,7 @@ use uuid::Uuid;
 use crate::{
     db::{
         Database,
-        entities::{audit_event, audit_setting},
+        entities::{audit_event, audit_setting, machine_access_token},
     },
     domain::now,
     error::AppError,
@@ -115,6 +115,59 @@ impl AuditRepository {
 
     pub async fn list(&self) -> Result<Vec<AuditEvent>, AppError> {
         audit_event::Entity::find()
+            .order_by_desc(audit_event::Column::CreatedAt)
+            .order_by_desc(audit_event::Column::Id)
+            .limit(500)
+            .all(self.db.connection())
+            .await?
+            .into_iter()
+            .map(AuditEvent::try_from)
+            .collect()
+    }
+
+    pub async fn list_machine(
+        &self,
+        machine_id: Uuid,
+        from: Option<i64>,
+        to: Option<i64>,
+    ) -> Result<Vec<AuditEvent>, AppError> {
+        if from.zip(to).is_some_and(|(from, to)| from > to) {
+            return Err(AppError::Validation("audit time range is invalid".into()));
+        }
+        let id = machine_id.to_string();
+        let token_ids = machine_access_token::Entity::find()
+            .select_only()
+            .column(machine_access_token::Column::Id)
+            .filter(machine_access_token::Column::MachineAccountId.eq(id.clone()))
+            .into_tuple::<String>()
+            .all(self.db.connection())
+            .await?;
+        let mut related = Condition::any()
+            .add(
+                Condition::all()
+                    .add(audit_event::Column::ActorKind.eq("machine"))
+                    .add(audit_event::Column::ActorId.eq(id.clone())),
+            )
+            .add(
+                Condition::all()
+                    .add(audit_event::Column::ResourceKind.eq("machine"))
+                    .add(audit_event::Column::ResourceId.eq(id)),
+            );
+        if !token_ids.is_empty() {
+            related = related.add(
+                Condition::all()
+                    .add(audit_event::Column::ResourceKind.eq("machine_token"))
+                    .add(audit_event::Column::ResourceId.is_in(token_ids)),
+            );
+        }
+        let mut query = audit_event::Entity::find().filter(related);
+        if let Some(from) = from {
+            query = query.filter(audit_event::Column::CreatedAt.gte(from));
+        }
+        if let Some(to) = to {
+            query = query.filter(audit_event::Column::CreatedAt.lte(to));
+        }
+        query
             .order_by_desc(audit_event::Column::CreatedAt)
             .order_by_desc(audit_event::Column::Id)
             .limit(500)

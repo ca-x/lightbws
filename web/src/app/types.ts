@@ -17,9 +17,11 @@ export interface Session { user: User; csrfToken: string }
 export interface Overview { projects: number; secrets: number; trash: number }
 export interface Permission { read: boolean; write: boolean }
 export interface Project { id: string; name: string; sdkEncrypted: boolean; deletedAt: number | null; createdAt: number; updatedAt: number; permissions: Permission }
-export interface Secret { id: string; projectId: string; key: string; value: string | null; note: string; sdkEncrypted: boolean; deletedAt: number | null; createdAt: number; updatedAt: number; permissions: Permission }
+export interface Secret { id: string; projectId: string | null; key: string; value: string | null; note: string; sdkEncrypted: boolean; deletedAt: number | null; createdAt: number; updatedAt: number; permissions: Permission }
 export interface MachineAccount { id: string; name: string; clientId: string; lastUsedAt: number | null; revokedAt: number | null; compatibilityAccount: boolean; createdAt: number }
 export interface IssuedMachineAccount extends MachineAccount { accessToken: string }
+export interface MachineAccessToken { id: string; machineAccountId: string; name: string; expiresAt: number | null; lastUsedAt: number | null; revokedAt: number | null; createdAt: number }
+export interface IssuedMachineAccessToken extends MachineAccessToken { accessToken: string }
 export interface Group { id: string; name: string; memberIds: string[]; createdAt: number; updatedAt: number }
 export interface NamedGrant { granteeId: string; name: string; read: boolean; write: boolean }
 export interface GrantInput { granteeId: string; read: boolean; write: boolean }

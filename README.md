@@ -84,7 +84,7 @@ docker compose pull
 docker compose up -d
 ```
 
-Set `LIGHTBWS_IMAGE=ghcr.io/ca-x/lightbws:0.2.0` in `.env` when a deployment must remain pinned to a specific release. Running `docker compose down` keeps the data volume; `docker compose down -v` permanently deletes it.
+Set `LIGHTBWS_IMAGE=ghcr.io/ca-x/lightbws:0.2.1` in `.env` when a deployment must remain pinned to a specific release. Running `docker compose down` keeps the data volume; `docker compose down -v` permanently deletes it.
 
 ### Release binary
 
@@ -116,7 +116,7 @@ The remaining values are passed into the LightBWS container:
 | `LIGHTBWS_BIND` | `0.0.0.0:8080` | HTTP listen address. |
 | `LIGHTBWS_DATA_DIR` | `data` | SQLite database and generated master-key directory. |
 | `LIGHTBWS_ADMIN_USERNAME` | none | Initial administrator username. |
-| `LIGHTBWS_ADMIN_PASSWORD` | none | Initial administrator password, minimum 8 characters. |
+| `LIGHTBWS_ADMIN_PASSWORD` | none | Initial administrator password, minimum 6 characters. |
 | `LIGHTBWS_COOKIE_SECURE` | `false` | Require HTTPS for Web session cookies. Enable behind an HTTPS reverse proxy. |
 | `LIGHTBWS_ENABLE_UPSTREAM_COMPATIBILITY_ACCOUNT` | `false` | Create the upstream SDK test fixtures' publicly known fixed credentials. Never enable it on a shared or internet-facing deployment. |
 | `LIGHTBWS_MASTER_KEY` | generated | Base64url or hexadecimal 32-byte key used to encrypt stored backup credentials and automatic backup archives. |
@@ -289,8 +289,8 @@ After CI succeeds on `main`, pushing a semantic `vX.Y.Z` tag starts two release 
 
 ```bash
 git push origin main
-git tag -a v0.2.0 -m "LightBWS v0.2.0"
-git push origin v0.2.0
+git tag -a v0.2.1 -m "LightBWS v0.2.1"
+git push origin v0.2.1
 ```
 
 The Docker workflow builds `linux/amd64` and `linux/arm64` on native GitHub runners, then publishes the same multi-platform tags to `ghcr.io/ca-x/lightbws` and `docker.io/czyt/lightbws`. Repository or organization secrets named `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` are required. Each release archive contains the binary, both language READMEs, and the license, with a companion SHA-256 checksum asset. Frontend files are already embedded in the binary.

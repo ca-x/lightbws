@@ -1,4 +1,4 @@
-import type { AccessPolicy, AccessPolicyInput, AuditEvent, AuditSettings, BackupCapabilities, BackupJob, BackupScopes, BackupTarget, Group, IssuedMachineAccount, MachineAccess, MachineAccessInput, MachineAccount, Overview, Project, Role, Secret, Session, User } from "./types"
+import type { AccessPolicy, AccessPolicyInput, AuditEvent, AuditSettings, BackupCapabilities, BackupJob, BackupScopes, BackupTarget, Group, IssuedMachineAccessToken, IssuedMachineAccount, MachineAccess, MachineAccessInput, MachineAccessToken, MachineAccount, Overview, Project, Role, Secret, Session, User } from "./types"
 
 export class ApiError extends Error {
   constructor(public status: number, public code: string) { super(code) }
@@ -36,8 +36,8 @@ export const api = {
   restoreProject: (id: string) => request<void>(`/projects/${id}/restore`, { method: "PUT" }),
   purgeProject: (id: string) => request<void>(`/projects/${id}/purge`, { method: "DELETE" }),
   secrets: (trash = false, projectId?: string) => request<Secret[]>(`/secrets?trash=${trash}${projectId ? `&projectId=${projectId}` : ""}`),
-  createSecret: (input: { key: string; value: string; note: string; projectId: string }) => request<Secret>("/secrets", json("POST", input)),
-  updateSecret: (id: string, input: { key: string; value: string; note: string; projectId: string }) => request<Secret>(`/secrets/${id}`, json("PUT", input)),
+  createSecret: (input: { key: string; value: string; note: string; projectId: string | null }) => request<Secret>("/secrets", json("POST", input)),
+  updateSecret: (id: string, input: { key: string; value: string; note: string; projectId: string | null }) => request<Secret>(`/secrets/${id}`, json("PUT", input)),
   trashSecret: (id: string) => request<void>(`/secrets/${id}`, { method: "DELETE" }),
   restoreSecret: (id: string) => request<void>(`/secrets/${id}/restore`, { method: "PUT" }),
   purgeSecret: (id: string) => request<void>(`/secrets/${id}/purge`, { method: "DELETE" }),
@@ -52,6 +52,10 @@ export const api = {
   replaceGroupMembers: (id: string, memberIds: string[]) => request<Group>(`/admin/groups/${id}/members`, json("PUT", { memberIds })),
   machines: () => request<MachineAccount[]>("/admin/machines"),
   createMachine: (name: string) => request<IssuedMachineAccount>("/admin/machines", json("POST", { name })),
+  machineTokens: (id: string) => request<MachineAccessToken[]>(`/admin/machines/${id}/tokens`),
+  createMachineToken: (id: string, name: string, expiresAt: number | null) => request<IssuedMachineAccessToken>(`/admin/machines/${id}/tokens`, json("POST", { name, expiresAt })),
+  revokeMachineToken: (id: string, tokenId: string) => request<MachineAccessToken>(`/admin/machines/${id}/tokens/${tokenId}/revoke`, { method: "PUT" }),
+  machineEvents: (id: string) => request<AuditEvent[]>(`/admin/machines/${id}/events`),
   setMachineRevoked: (id: string, revoked: boolean) => request<MachineAccount>(`/admin/machines/${id}/${revoked ? "revoke" : "restore"}`, { method: "PUT" }),
   deleteMachine: (id: string) => request<void>(`/admin/machines/${id}`, { method: "DELETE" }),
   projectAccess: (id: string) => request<AccessPolicy>(`/projects/${id}/access`),

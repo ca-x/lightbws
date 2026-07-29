@@ -6,7 +6,10 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::{
-    db::{Database, entities::project},
+    db::{
+        Database,
+        entities::{project, secret},
+    },
     domain::{ORGANIZATION_ID, access::Permission, next_sdk_revision, now},
     error::AppError,
 };
@@ -155,6 +158,11 @@ impl ProjectRepository {
 
     pub async fn purge(&self, id: Uuid) -> Result<(), AppError> {
         let transaction = self.db.connection().begin().await?;
+        secret::Entity::delete_many()
+            .filter(secret::Column::ProjectId.eq(id.to_string()))
+            .filter(secret::Column::KeyCipher.is_not_null())
+            .exec(&transaction)
+            .await?;
         let result = project::Entity::delete_by_id(id.to_string())
             .exec(&transaction)
             .await?;

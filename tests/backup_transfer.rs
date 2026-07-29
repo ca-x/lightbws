@@ -267,6 +267,17 @@ async fn full_instance_dump_rebuilds_persistent_application_state() {
             .len(),
         1
     );
+    let restored_machine_repository = MachineRepository::new(target.clone());
+    let restored_secret = machine
+        .access_token
+        .split('.')
+        .nth(2)
+        .and_then(|part| part.split(':').next())
+        .expect("restored machine secret");
+    restored_machine_repository
+        .authenticate(&machine.account.client_id.to_string(), restored_secret)
+        .await
+        .expect("restored machine token authenticates");
     assert_eq!(
         ProjectRepository::new(target.clone())
             .list(false)
@@ -309,6 +320,74 @@ async fn full_instance_dump_rebuilds_persistent_application_state() {
         restored_target.encryption,
         lightbws::domain::backups::BackupEncryption::MasterKey
     );
+}
+
+#[tokio::test]
+async fn machine_account_merge_preserves_target_only_credentials() {
+    let source_data = tempfile::tempdir().expect("source tempdir");
+    let source = Database::connect(&source_data.path().join("source-machines.sqlite3"))
+        .await
+        .expect("source database");
+    let source_admin = UserRepository::new(source.clone())
+        .create(
+            "source-admin",
+            "Source Admin",
+            Role::Admin,
+            "test-password-123",
+        )
+        .await
+        .expect("source admin");
+    MachineRepository::new(source.clone())
+        .issue("Source machine", source_admin.id)
+        .await
+        .expect("source machine");
+
+    let target_data = tempfile::tempdir().expect("target tempdir");
+    let target = Database::connect(&target_data.path().join("target-machines.sqlite3"))
+        .await
+        .expect("target database");
+    let target_admin = UserRepository::new(target.clone())
+        .create(
+            "target-admin",
+            "Target Admin",
+            Role::Admin,
+            "test-password-123",
+        )
+        .await
+        .expect("target admin");
+    let target_machine = MachineRepository::new(target.clone())
+        .issue("Target machine", target_admin.id)
+        .await
+        .expect("target machine");
+
+    let key = MasterKey::random().expect("master key");
+    let dump = dump_database_scoped(
+        &source,
+        &key,
+        BackupScopes {
+            identities: true,
+            machine_accounts: true,
+            ..BackupScopes::default()
+        },
+    )
+    .await
+    .expect("machine account dump");
+    import_database_scoped(&target, &key, &dump, false, false)
+        .await
+        .expect("machine account merge");
+
+    MachineRepository::new(target)
+        .authenticate(
+            &target_machine.account.client_id.to_string(),
+            target_machine
+                .access_token
+                .split('.')
+                .nth(2)
+                .and_then(|part| part.split(':').next())
+                .expect("target machine secret"),
+        )
+        .await
+        .expect("target-only credential remains valid");
 }
 
 #[tokio::test]

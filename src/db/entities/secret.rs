@@ -5,7 +5,7 @@ use sea_orm::entity::prelude::*;
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub id: String,
-    pub project_id: String,
+    pub project_id: Option<String>,
     pub key_cipher: Option<String>,
     pub value_cipher: Option<String>,
     pub note_cipher: Option<String>,
@@ -25,7 +25,7 @@ pub enum Relation {
         from = "Column::ProjectId",
         to = "super::project::Column::Id",
         on_update = "Cascade",
-        on_delete = "Cascade"
+        on_delete = "SetNull"
     )]
     Project,
 }

@@ -4,6 +4,7 @@ pub mod backup_job;
 pub mod backup_target;
 pub mod group;
 pub mod group_member;
+pub mod machine_access_token;
 pub mod machine_account;
 pub mod machine_group_grant;
 pub mod machine_session;

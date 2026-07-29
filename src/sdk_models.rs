@@ -140,7 +140,9 @@ impl TryFrom<secret::Model> for SdkSecret {
         Ok(Self {
             id: parse_uuid(&value.id)?,
             organization_id: parse_uuid(ORGANIZATION_ID)?,
-            project_id: Some(parse_uuid(&value.project_id)?),
+            project_id: Some(parse_uuid(
+                value.project_id.as_deref().ok_or(AppError::NotFound)?,
+            )?),
             key: value.key_cipher.ok_or(AppError::NotFound)?,
             value: value.value_cipher.ok_or(AppError::NotFound)?,
             note: value.note_cipher.unwrap_or_default(),

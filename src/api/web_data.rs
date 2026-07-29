@@ -11,7 +11,7 @@ use crate::{
     AppState,
     auth::{AuthenticatedSession, MutationSession, require_admin},
     domain::{
-        access::AccessRepository,
+        access::{AccessRepository, Permission},
         audit::{AuditActor, AuditRepository},
         projects::{ProjectRepository, WebProject},
         secrets::{SecretRepository, WebSecret},
@@ -39,7 +39,7 @@ struct SecretInput {
     value: String,
     #[serde(default)]
     note: String,
-    project_id: Uuid,
+    project_id: Option<Uuid>,
 }
 
 #[derive(Serialize)]
@@ -257,10 +257,16 @@ async fn create_secret(
     mutation: MutationSession,
     Json(input): Json<SecretInput>,
 ) -> Result<(StatusCode, Json<WebSecret>), AppError> {
-    let permissions = AccessRepository::new(state.db.clone())
-        .user_project(mutation.0.user_id, mutation.0.user.role, input.project_id)
-        .await?;
-    permissions.require_write()?;
+    let permissions = if let Some(project_id) = input.project_id {
+        let permissions = AccessRepository::new(state.db.clone())
+            .user_project(mutation.0.user_id, mutation.0.user.role, project_id)
+            .await?;
+        permissions.require_write()?;
+        permissions
+    } else {
+        require_admin(&mutation.0.user)?;
+        Permission::FULL
+    };
     let mut secret = SecretRepository::new(state.db.clone())
         .create_plain(&input.key, &input.value, &input.note, input.project_id)
         .await?;
@@ -289,16 +295,20 @@ async fn update_secret(
         .user_secret(mutation.0.user_id, mutation.0.user.role, &existing)
         .await?
         .require_write()?;
-    let target = if existing.project_id == input.project_id.to_string() {
+    let target_project = input.project_id.map(|id| id.to_string());
+    let target = if existing.project_id == target_project {
         access
             .user_secret(mutation.0.user_id, mutation.0.user.role, &existing)
             .await?
-    } else {
+    } else if let Some(project_id) = input.project_id {
         let target = access
-            .user_project(mutation.0.user_id, mutation.0.user.role, input.project_id)
+            .user_project(mutation.0.user_id, mutation.0.user.role, project_id)
             .await?;
         target.require_write()?;
         target
+    } else {
+        require_admin(&mutation.0.user)?;
+        Permission::FULL
     };
     let mut secret = repository
         .update_plain(id, &input.key, &input.value, &input.note, input.project_id)

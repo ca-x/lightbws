@@ -15,10 +15,10 @@ use crate::{
     db::{
         Database,
         entities::{
-            audit_event, audit_setting, backup_target, group, group_member, machine_account,
-            machine_group_grant, machine_user_grant, project, project_group_grant,
-            project_machine_grant, project_user_grant, secret, secret_group_grant,
-            secret_machine_grant, secret_user_grant, user,
+            audit_event, audit_setting, backup_target, group, group_member, machine_access_token,
+            machine_account, machine_group_grant, machine_session, machine_user_grant, project,
+            project_group_grant, project_machine_grant, project_user_grant, secret,
+            secret_group_grant, secret_machine_grant, secret_user_grant, user,
         },
     },
     domain::{
@@ -120,7 +120,7 @@ pub struct DatabaseDump {
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct DatabaseDumpV2 {
+struct DatabaseDumpV3 {
     version: u8,
     exported_at: i64,
     scopes: BackupScopes,
@@ -134,6 +134,8 @@ struct DatabaseDumpV2 {
     group_members: Option<Vec<group_member::Model>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     machine_accounts: Option<Vec<machine_account::Model>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    machine_access_tokens: Option<Vec<machine_access_token::Model>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     project_user_grants: Option<Vec<project_user_grant::Model>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -196,7 +198,7 @@ struct ProjectRecord {
 struct SecretRecord {
     id: String,
     organization_id: String,
-    project_id: String,
+    project_id: Option<String>,
     key_cipher: Option<String>,
     value_cipher: Option<String>,
     note_cipher: Option<String>,
@@ -229,7 +231,7 @@ pub async fn dump_database(db: &Database) -> Result<Vec<u8>, AppError> {
                     + COALESCE(LENGTH(name_plain), 0) + 512
                 ) FROM projects), 0)
                 + COALESCE((SELECT SUM(
-                    LENGTH(id) + LENGTH(project_id)
+                    LENGTH(id) + COALESCE(LENGTH(project_id), 0)
                     + COALESCE(LENGTH(key_cipher), 0) + COALESCE(LENGTH(value_cipher), 0)
                     + COALESCE(LENGTH(note_cipher), 0) + COALESCE(LENGTH(key_plain), 0)
                     + COALESCE(LENGTH(value_plain), 0) + COALESCE(LENGTH(note_plain), 0) + 768
@@ -297,6 +299,9 @@ pub async fn dump_database_scoped(
         optional_models::<group_member::Entity>(&transaction, scopes.identities).await?;
     let machine_accounts =
         optional_models::<machine_account::Entity>(&transaction, scopes.machine_accounts).await?;
+    let machine_access_tokens =
+        optional_models::<machine_access_token::Entity>(&transaction, scopes.machine_accounts)
+            .await?;
     let project_user_grants =
         optional_models::<project_user_grant::Entity>(&transaction, scopes.access_policies).await?;
     let project_group_grants =
@@ -359,8 +364,8 @@ pub async fn dump_database_scoped(
         None
     };
     transaction.commit().await?;
-    let serialized = serde_json::to_vec(&DatabaseDumpV2 {
-        version: 2,
+    let serialized = serde_json::to_vec(&DatabaseDumpV3 {
+        version: 3,
         exported_at: super::now(),
         scopes,
         projects,
@@ -369,6 +374,7 @@ pub async fn dump_database_scoped(
         groups,
         group_members,
         machine_accounts,
+        machine_access_tokens,
         project_user_grants,
         project_group_grants,
         project_machine_grants,
@@ -499,19 +505,19 @@ pub async fn import_database_scoped(
     if version == Some(1) {
         if replace {
             return Err(AppError::Validation(
-                "replace restore requires a version 2 full-instance backup".into(),
+                "replace restore requires a version 3 full-instance backup".into(),
             ));
         }
         return import_database(db, bytes).await;
     }
-    let dump: DatabaseDumpV2 = serde_json::from_slice(bytes)
+    let dump: DatabaseDumpV3 = serde_json::from_slice(bytes)
         .map_err(|_| AppError::Validation("invalid LightBWS export".into()))?;
-    if dump.version != 2 {
+    if dump.version != 3 {
         return Err(AppError::Validation("unsupported LightBWS export".into()));
     }
     let scopes = dump.scopes;
     scopes.validate()?;
-    validate_v2_sections(&dump)?;
+    validate_v3_sections(&dump)?;
     if scopes.audit && !matches!(dump.audit_settings.as_deref(), Some([setting]) if setting.id == 1)
     {
         return Err(AppError::Validation(
@@ -542,6 +548,13 @@ pub async fn import_database_scoped(
     }
     let project_count = dump.projects.len();
     let secret_count = dump.secrets.len();
+    let imported_token_ids = dump
+        .machine_access_tokens
+        .as_ref()
+        .into_iter()
+        .flatten()
+        .map(|token| token.id.clone())
+        .collect::<Vec<_>>();
     let transaction = db.connection().begin().await?;
     if replace {
         clear_full_instance(&transaction).await?;
@@ -549,8 +562,11 @@ pub async fn import_database_scoped(
     if scopes.identities {
         connection_delete(&transaction, "DELETE FROM sessions").await?;
     }
-    if scopes.machine_accounts {
-        connection_delete(&transaction, "DELETE FROM machine_sessions").await?;
+    if !imported_token_ids.is_empty() {
+        machine_session::Entity::delete_many()
+            .filter(machine_session::Column::MachineAccessTokenId.is_in(imported_token_ids))
+            .exec(&transaction)
+            .await?;
     }
 
     upsert_models::<user::ActiveModel, _>(&transaction, dump.users.unwrap_or_default()).await?;
@@ -587,6 +603,11 @@ pub async fn import_database_scoped(
     upsert_models::<machine_account::ActiveModel, _>(
         &transaction,
         dump.machine_accounts.unwrap_or_default(),
+    )
+    .await?;
+    upsert_models::<machine_access_token::ActiveModel, _>(
+        &transaction,
+        dump.machine_access_tokens.unwrap_or_default(),
     )
     .await?;
     upsert_models::<project_user_grant::ActiveModel, _>(
@@ -755,11 +776,12 @@ fn validate_import_size(bytes: &[u8]) -> Result<(), AppError> {
     Ok(())
 }
 
-fn validate_v2_sections(dump: &DatabaseDumpV2) -> Result<(), AppError> {
+fn validate_v3_sections(dump: &DatabaseDumpV3) -> Result<(), AppError> {
     let valid = dump.users.is_some() == dump.scopes.identities
         && dump.groups.is_some() == dump.scopes.identities
         && dump.group_members.is_some() == dump.scopes.identities
         && dump.machine_accounts.is_some() == dump.scopes.machine_accounts
+        && dump.machine_access_tokens.is_some() == dump.scopes.machine_accounts
         && dump.project_user_grants.is_some() == dump.scopes.access_policies
         && dump.project_group_grants.is_some() == dump.scopes.access_policies
         && dump.project_machine_grants.is_some() == dump.scopes.access_policies
@@ -793,6 +815,7 @@ async fn clear_full_instance(connection: &impl ConnectionTrait) -> Result<(), Ap
             DELETE FROM backup_jobs;
             DELETE FROM backup_targets;
             DELETE FROM machine_sessions;
+            DELETE FROM machine_access_tokens;
             DELETE FROM machine_accounts;
             DELETE FROM group_members;
             DELETE FROM groups;
@@ -969,7 +992,11 @@ fn validate_project_record(record: &ProjectRecord) -> Result<(), AppError> {
 fn validate_secret_record(record: &SecretRecord) -> Result<(), AppError> {
     uuid::Uuid::parse_str(&record.id)
         .map_err(|_| AppError::Validation("invalid secret identifier".into()))?;
-    if uuid::Uuid::parse_str(&record.project_id).is_err()
+    if record
+        .project_id
+        .as_deref()
+        .is_some_and(|id| uuid::Uuid::parse_str(id).is_err())
+        || (record.key_cipher.is_some() && record.project_id.is_none())
         || record
             .key_plain
             .as_deref()

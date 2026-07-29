@@ -1,6 +1,6 @@
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     routing::get,
 };
@@ -11,9 +11,12 @@ use crate::{
     AppState,
     auth::{MutationSession, require_admin, revoke_user_sessions},
     domain::{
-        audit::{AuditActor, AuditRepository},
+        audit::{AuditActor, AuditEvent, AuditRepository},
         groups::{Group, GroupRepository},
-        machines::{IssuedMachineAccount, MachineAccount, MachineRepository},
+        machines::{
+            IssuedMachineAccessToken, IssuedMachineAccount, MachineAccessToken, MachineAccount,
+            MachineRepository,
+        },
         users::{PublicUser, Role, UserRepository},
     },
     error::AppError,
@@ -47,6 +50,19 @@ struct CreateMachineInput {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CreateMachineAccessTokenInput {
+    name: String,
+    expires_at: Option<i64>,
+}
+
+#[derive(Deserialize)]
+struct MachineEventsQuery {
+    from: Option<i64>,
+    to: Option<i64>,
+}
+
+#[derive(Deserialize)]
 struct GroupInput {
     name: String,
 }
@@ -63,6 +79,15 @@ pub fn routes() -> Router<AppState> {
         .route("/users/{id}", axum::routing::put(update_user))
         .route("/users/{id}/password", axum::routing::put(reset_password))
         .route("/machines", get(list_machines).post(create_machine))
+        .route(
+            "/machines/{id}/tokens",
+            get(list_machine_tokens).post(create_machine_token),
+        )
+        .route(
+            "/machines/{id}/tokens/{token_id}/revoke",
+            axum::routing::put(revoke_machine_token),
+        )
+        .route("/machines/{id}/events", get(list_machine_events))
         .route("/machines/{id}/revoke", axum::routing::put(revoke_machine))
         .route(
             "/machines/{id}/restore",
@@ -233,6 +258,75 @@ async fn create_machine(
     )
     .await?;
     Ok((StatusCode::CREATED, Json(account)))
+}
+
+async fn list_machine_tokens(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    session: crate::auth::AuthenticatedSession,
+) -> Result<Json<Vec<MachineAccessToken>>, AppError> {
+    require_admin(&session.user)?;
+    Ok(Json(
+        MachineRepository::new(state.db)
+            .list_access_tokens(id)
+            .await?,
+    ))
+}
+
+async fn create_machine_token(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    mutation: MutationSession,
+    Json(input): Json<CreateMachineAccessTokenInput>,
+) -> Result<(StatusCode, Json<IssuedMachineAccessToken>), AppError> {
+    require_admin(&mutation.0.user)?;
+    let token = MachineRepository::new(state.db.clone())
+        .issue_access_token(id, &input.name, input.expires_at)
+        .await?;
+    record_admin_event(
+        &state,
+        &mutation,
+        "machine.token.create",
+        "machine_token",
+        token.token.id,
+    )
+    .await?;
+    Ok((StatusCode::CREATED, Json(token)))
+}
+
+async fn revoke_machine_token(
+    State(state): State<AppState>,
+    Path((id, token_id)): Path<(Uuid, Uuid)>,
+    mutation: MutationSession,
+) -> Result<Json<MachineAccessToken>, AppError> {
+    require_admin(&mutation.0.user)?;
+    let token = MachineRepository::new(state.db.clone())
+        .revoke_access_token(id, token_id)
+        .await?;
+    record_admin_event(
+        &state,
+        &mutation,
+        "machine.token.revoke",
+        "machine_token",
+        token.id,
+    )
+    .await?;
+    Ok(Json(token))
+}
+
+async fn list_machine_events(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Query(query): Query<MachineEventsQuery>,
+    session: crate::auth::AuthenticatedSession,
+) -> Result<Json<Vec<AuditEvent>>, AppError> {
+    require_admin(&session.user)?;
+    MachineRepository::new(state.db.clone()).get(id).await?;
+    Ok(Json(
+        AuditRepository::new(state.db)
+            .list_machine(id, query.from, query.to)
+            .await?,
+    ))
 }
 
 async fn revoke_machine(

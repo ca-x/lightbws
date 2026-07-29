@@ -171,13 +171,14 @@ tbody tr { transition: background-color 140ms ease; }
 .empty-state h2 { margin-block-end: 0.25rem; font-size: 1.05rem; }
 .empty-state p { max-width: 34ch; margin-block-end: 1.25rem; font-size: 0.78rem; }
 
-.status-pill { display: inline-flex; align-items: center; gap: 0.38rem; min-height: 1.7rem; border: 1px solid var(--line); border-radius: 999px; background: var(--surface-muted); color: var(--ink-secondary); padding-inline: 0.55rem; font-size: 0.65rem; font-weight: 700; white-space: nowrap; }
+.status-pill { display: inline-flex; align-items: center; gap: 0.38rem; min-height: 1.7rem; border: 1px solid var(--line); border-radius: 999px; background: var(--surface-muted); color: var(--ink); padding-inline: 0.55rem; font-size: 0.65rem; font-weight: 700; white-space: nowrap; }
 .status-pill i { width: 0.42rem; height: 0.42rem; border-radius: 50%; background: var(--success); }
 .status-pill[data-status="failed"] i,
 .status-pill[data-status="disabled"] i,
 .status-pill[data-status="revoked"] i,
 .status-pill[data-status="denied"] i { background: var(--danger); }
 .status-pill[data-status="running"] i { background: var(--warning); }
+.status-pill[data-status="expired"] i { background: var(--warning); }
 .status-pill[data-status="changed"] i,
 .status-pill[data-status="readOnly"] i { background: var(--warning); }
 
@@ -192,6 +193,20 @@ tbody tr { transition: background-color 140ms ease; }
 }
 .token-box { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 0.6rem; margin-block: 1rem; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--surface-muted); padding: 0.75rem; }
 .token-box code { min-width: 0; word-break: break-all; }
+.dialog-tabs { display: flex; gap: 0.25rem; margin-block-end: 1.25rem; overflow-x: auto; border-block-end: 1px solid var(--line); }
+.dialog-tabs button { display: inline-flex; min-height: 2.75rem; align-items: center; gap: 0.45rem; flex: 0 0 auto; border: 0; border-block-end: 2px solid transparent; background: transparent; color: var(--ink-muted); padding-inline: 0.75rem; cursor: pointer; font-size: 0.76rem; font-weight: 650; white-space: nowrap; transition: border-color 120ms ease, color 120ms ease, background-color 120ms ease; }
+.dialog-tabs button svg { width: 1rem; }
+.dialog-tabs button[data-active="true"] { border-block-end-color: var(--signal); background: var(--signal-soft); color: var(--signal); }
+.machine-operation-panel { display: grid; gap: 1rem; min-height: 17rem; }
+.machine-operation-panel .panel-heading { align-items: center; flex-wrap: wrap; }
+.machine-operation-panel .panel-heading h3 { margin: 0; color: var(--ink); font-family: var(--font-display); font-size: 0.92rem; }
+.machine-operation-panel .panel-heading p { margin: 0.2rem 0 0; font-size: 0.72rem; }
+.machine-operation-panel .table-scroll { border: 1px solid var(--line); border-radius: var(--radius-control); }
+.machine-operation-panel table { min-width: 32rem; }
+.machine-operation-panel td code { white-space: nowrap; }
+.compact-empty { display: grid; min-height: 12rem; place-content: center; justify-items: center; gap: 0.65rem; border: 1px dashed var(--line-strong); border-radius: var(--radius-control); color: var(--ink-muted); text-align: center; }
+.compact-empty svg { width: 1.3rem; }
+.compact-empty p { margin: 0; font-size: 0.76rem; }
 
 .trash-groups { display: grid; gap: 2rem; padding: 1rem; }
 .trash-groups section > h2 { margin: 0.5rem 0.75rem; color: var(--ink-muted); font-family: var(--font-code); font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; }
@@ -295,6 +310,8 @@ tbody tr { transition: background-color 140ms ease; }
   .login-language > button:hover { background: var(--surface-hover); color: var(--ink); }
   .theme-option:hover { border-color: var(--line-strong); background: var(--surface-hover); transform: translateY(-1px); }
   .theme-option[data-selected="true"]:hover { border-color: var(--signal); background: var(--signal-soft); }
+  .dialog-tabs button:hover { background: var(--surface-hover); color: var(--ink); }
+  .dialog-tabs button[data-active="true"]:hover { background: var(--signal-soft); color: var(--signal); }
 }
 
 @media (min-width: 40rem) {
@@ -326,7 +343,8 @@ tbody tr { transition: background-color 140ms ease; }
   .nav-item,
   .choice-card,
   .field input,
-  .field select { min-height: 3rem; }
+  .field select,
+  .dialog-tabs button { min-height: 3rem; }
 }
 
 @media (prefers-reduced-motion: reduce) {

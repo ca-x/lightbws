@@ -11,7 +11,7 @@
   --surface-pressed: var(--color-overlay-pressed);
   --ink: var(--color-text-primary);
   --ink-secondary: var(--color-text-secondary);
-  --ink-muted: var(--color-text-disabled);
+  --ink-muted: color-mix(in srgb, var(--ink) 72%, var(--surface));
   --line: var(--color-border);
   --line-strong: var(--color-border-emphasized);
   --signal: var(--color-accent);

@@ -18,7 +18,7 @@ use crate::{
 #[serde(rename_all = "camelCase")]
 pub struct WebSecret {
     pub id: Uuid,
-    pub project_id: Uuid,
+    pub project_id: Option<Uuid>,
     pub key: String,
     pub value: Option<String>,
     pub note: String,
@@ -74,16 +74,19 @@ impl SecretRepository {
         key: &str,
         value: &str,
         note: &str,
-        project_id: Uuid,
+        project_id: impl Into<Option<Uuid>>,
     ) -> Result<WebSecret, AppError> {
         validate_plain(key, value, note)?;
+        let project_id = project_id.into();
         let timestamp = now();
         let transaction = self.db.connection().begin().await?;
-        require_active_project(&transaction, project_id).await?;
+        if let Some(project_id) = project_id {
+            require_active_project(&transaction, project_id).await?;
+        }
         let revision_nanos = next_sdk_revision(&transaction).await?;
         let model = secret::ActiveModel {
             id: Set(Uuid::new_v4().to_string()),
-            project_id: Set(project_id.to_string()),
+            project_id: Set(project_id.map(|id| id.to_string())),
             key_cipher: Set(None),
             value_cipher: Set(None),
             note_cipher: Set(None),
@@ -115,7 +118,7 @@ impl SecretRepository {
         let revision_nanos = next_sdk_revision(&transaction).await?;
         let model = secret::ActiveModel {
             id: Set(Uuid::new_v4().to_string()),
-            project_id: Set(project_id.to_string()),
+            project_id: Set(Some(project_id.to_string())),
             key_cipher: Set(Some(key)),
             value_cipher: Set(Some(value)),
             note_cipher: Set(Some(note)),
@@ -139,11 +142,14 @@ impl SecretRepository {
         key: &str,
         value: &str,
         note: &str,
-        project_id: Uuid,
+        project_id: impl Into<Option<Uuid>>,
     ) -> Result<WebSecret, AppError> {
         validate_plain(key, value, note)?;
+        let project_id = project_id.into();
         let transaction = self.db.connection().begin().await?;
-        require_active_project(&transaction, project_id).await?;
+        if let Some(project_id) = project_id {
+            require_active_project(&transaction, project_id).await?;
+        }
         let model = secret::Entity::find_by_id(id.to_string())
             .one(&transaction)
             .await?
@@ -156,7 +162,7 @@ impl SecretRepository {
         active.key_plain = Set(Some(key.trim().into()));
         active.value_plain = Set(Some(value.into()));
         active.note_plain = Set(Some(note.into()));
-        active.project_id = Set(project_id.to_string());
+        active.project_id = Set(project_id.map(|id| id.to_string()));
         active.updated_at = Set(now());
         active.revision_nanos = Set(revision_nanos);
         let model = active.update(&transaction).await?;
@@ -187,7 +193,7 @@ impl SecretRepository {
         active.key_plain = Set(None);
         active.value_plain = Set(None);
         active.note_plain = Set(None);
-        active.project_id = Set(project_id.to_string());
+        active.project_id = Set(Some(project_id.to_string()));
         active.updated_at = Set(now());
         active.revision_nanos = Set(revision_nanos);
         let model = active.update(&transaction).await?;
@@ -246,7 +252,10 @@ impl TryFrom<secret::Model> for WebSecret {
         let sdk_encrypted = value.key_cipher.is_some();
         Ok(Self {
             id: Uuid::parse_str(&value.id).map_err(AppError::internal)?,
-            project_id: Uuid::parse_str(&value.project_id).map_err(AppError::internal)?,
+            project_id: value
+                .project_id
+                .map(|id| Uuid::parse_str(&id).map_err(AppError::internal))
+                .transpose()?,
             key: value
                 .key_plain
                 .unwrap_or_else(|| "Encrypted SDK secret".into()),

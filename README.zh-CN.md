@@ -84,7 +84,7 @@ docker compose pull
 docker compose up -d
 ```
 
-如果部署需要固定版本，可在 `.env` 中设置 `LIGHTBWS_IMAGE=ghcr.io/ca-x/lightbws:0.2.0`。执行 `docker compose down` 会保留数据卷，执行 `docker compose down -v` 会永久删除数据卷。
+如果部署需要固定版本，可在 `.env` 中设置 `LIGHTBWS_IMAGE=ghcr.io/ca-x/lightbws:0.2.1`。执行 `docker compose down` 会保留数据卷，执行 `docker compose down -v` 会永久删除数据卷。
 
 ### 发布二进制
 
@@ -116,7 +116,7 @@ export LIGHTBWS_ADMIN_PASSWORD='replace-with-a-long-password'
 | `LIGHTBWS_BIND` | `0.0.0.0:8080` | HTTP 监听地址。 |
 | `LIGHTBWS_DATA_DIR` | `data` | SQLite 数据库和生成的主密钥目录。 |
 | `LIGHTBWS_ADMIN_USERNAME` | 无 | 初始管理员用户名。 |
-| `LIGHTBWS_ADMIN_PASSWORD` | 无 | 初始管理员密码，至少 8 个字符。 |
+| `LIGHTBWS_ADMIN_PASSWORD` | 无 | 初始管理员密码，至少 6 个字符。 |
 | `LIGHTBWS_COOKIE_SECURE` | `false` | 要求 Web 会话 Cookie 只通过 HTTPS 传输。使用 HTTPS 反向代理时启用。 |
 | `LIGHTBWS_ENABLE_UPSTREAM_COMPATIBILITY_ACCOUNT` | `false` | 创建上游 SDK 测试夹具使用的公开固定凭据，仅用于兼容性测试。不要在共享或面向互联网的部署中启用。 |
 | `LIGHTBWS_MASTER_KEY` | 自动生成 | 用于加密存储备份凭据和自动备份归档的 Base64url 或十六进制 32 字节密钥。 |
@@ -289,8 +289,8 @@ npm --prefix web audit
 
 ```bash
 git push origin main
-git tag -a v0.2.0 -m "LightBWS v0.2.0"
-git push origin v0.2.0
+git tag -a v0.2.1 -m "LightBWS v0.2.1"
+git push origin v0.2.1
 ```
 
 Docker 工作流会在 GitHub 原生 Runner 上分别构建 `linux/amd64` 和 `linux/arm64`，再将相同的多架构标签发布到 `ghcr.io/ca-x/lightbws` 和 `docker.io/czyt/lightbws`。仓库或组织需要提供 `DOCKERHUB_USERNAME` 和 `DOCKERHUB_TOKEN` 两个 secret。每个发布压缩包包含二进制、两种语言的 README 和许可证，并提供独立的 SHA-256 校验文件。前端文件已经嵌入二进制。
