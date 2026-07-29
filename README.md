@@ -210,7 +210,7 @@ After CI succeeds on `main`, the Docker workflow publishes the `latest` and comm
 ```bash
 git tag -a v0.1.0 -m "LightBWS v0.1.0"
 git push origin main
-git push origin v0.1.0
+git push origin v0.1.1
 ```
 
 The Docker workflow builds `linux/amd64` and `linux/arm64` on native GitHub runners, then publishes the same multi-platform tags to `ghcr.io/ca-x/lightbws` and `docker.io/czyt/lightbws`. Repository or organization secrets named `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` are required. Each release archive contains the binary, both language READMEs, and the license, with a companion SHA-256 checksum asset. Frontend files are already embedded in the binary.

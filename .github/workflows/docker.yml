@@ -205,3 +205,12 @@ jobs:
                     and ($architectures | index("arm64")) != null
                 ' >/dev/null
           done
+      - name: Make the GHCR package public
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          package_name="${GITHUB_REPOSITORY#*/}"
+          gh api --method PATCH \
+            "/orgs/${GITHUB_REPOSITORY_OWNER}/packages/container/${package_name}" \
+            -f visibility=public >/dev/null

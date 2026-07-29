@@ -210,7 +210,7 @@ npm --prefix web audit
 ```bash
 git tag -a v0.1.0 -m "LightBWS v0.1.0"
 git push origin main
-git push origin v0.1.0
+git push origin v0.1.1
 ```
 
 Docker 工作流会在 GitHub 原生 Runner 上分别构建 `linux/amd64` 和 `linux/arm64`，再将相同的多架构标签发布到 `ghcr.io/ca-x/lightbws` 和 `docker.io/czyt/lightbws`。仓库或组织需要提供 `DOCKERHUB_USERNAME` 和 `DOCKERHUB_TOKEN` 两个 secret。每个发布压缩包包含二进制、两种语言的 README 和许可证，并提供独立的 SHA-256 校验文件。前端文件已经嵌入二进制。
