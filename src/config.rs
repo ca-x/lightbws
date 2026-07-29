@@ -16,6 +16,7 @@ pub struct Config {
     pub bootstrap_admin: Option<BootstrapAdmin>,
     pub cookie_secure: bool,
     pub upstream_compatibility_account: bool,
+    pub allow_plaintext_backups: bool,
     pub master_key: Option<SecretString>,
 }
 
@@ -40,6 +41,7 @@ impl Config {
         let cookie_secure = parse_bool("LIGHTBWS_COOKIE_SECURE", false)?;
         let upstream_compatibility_account =
             parse_bool("LIGHTBWS_ENABLE_UPSTREAM_COMPATIBILITY_ACCOUNT", false)?;
+        let allow_plaintext_backups = parse_bool("LIGHTBWS_ALLOW_PLAINTEXT_BACKUPS", false)?;
         let master_key = env_value("LIGHTBWS_MASTER_KEY").map(SecretString::from);
         Ok(Self {
             bind,
@@ -47,6 +49,7 @@ impl Config {
             bootstrap_admin,
             cookie_secure,
             upstream_compatibility_account,
+            allow_plaintext_backups,
             master_key,
         })
     }
@@ -103,6 +106,7 @@ impl std::fmt::Debug for Config {
                 "upstream_compatibility_account",
                 &self.upstream_compatibility_account,
             )
+            .field("allow_plaintext_backups", &self.allow_plaintext_backups)
             .field(
                 "master_key",
                 &self.master_key.as_ref().map(|_| "[REDACTED]"),

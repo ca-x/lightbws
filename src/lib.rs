@@ -16,6 +16,7 @@ use std::{
 
 use axum::{
     Router,
+    extract::DefaultBodyLimit,
     http::{HeaderName, HeaderValue},
     routing::get,
 };
@@ -35,6 +36,7 @@ pub struct AppState {
     pub(crate) login_failures: Arc<Mutex<HashMap<String, VecDeque<Instant>>>>,
     pub backup_permits: Arc<Semaphore>,
     pub master_key: MasterKey,
+    pub allow_plaintext_backups: bool,
 }
 
 impl AppState {
@@ -45,6 +47,7 @@ impl AppState {
             login_failures: Arc::new(Mutex::new(HashMap::new())),
             backup_permits: Arc::new(Semaphore::new(1)),
             master_key: MasterKey::random().expect("operating system random source"),
+            allow_plaintext_backups: config.allow_plaintext_backups,
         }
     }
 
@@ -58,13 +61,22 @@ pub fn create_app(state: AppState) -> Router {
     let csp = HeaderValue::from_static(
         "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'",
     );
-    Router::new()
+    let limited_routes = Router::new()
         .nest("/api/v1", api::routes())
         .merge(api::sdk::routes())
         .merge(api::access::sdk_routes())
         .route("/health", get(api::sdk::health))
         .route("/help", get(api::sdk::help))
         .fallback(web::serve)
+        .layer(RequestBodyLimitLayer::new(3 * 1024 * 1024));
+
+    limited_routes
+        .nest(
+            "/api/v1/transfer",
+            // Automatic archives contain an inner Base64 envelope and the JSON API
+            // Base64-encodes the file again. 128 MiB covers a 64 MiB logical dump.
+            api::transfer::routes().layer(DefaultBodyLimit::max(128 * 1024 * 1024)),
+        )
         .layer(SetResponseHeaderLayer::if_not_present(
             axum::http::header::CONTENT_SECURITY_POLICY,
             csp,
@@ -85,7 +97,6 @@ pub fn create_app(state: AppState) -> Router {
             HeaderName::from_static("permissions-policy"),
             HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
         ))
-        .layer(RequestBodyLimitLayer::new(3 * 1024 * 1024))
         .layer(CompressionLayer::new())
         .layer(CatchPanicLayer::new())
         .layer(TraceLayer::new_for_http())

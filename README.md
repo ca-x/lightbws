@@ -4,6 +4,22 @@ LightBWS is a persistent, self-hosted Bitwarden Secrets Manager server. It combi
 
 [简体中文](README.zh-CN.md)
 
+## Secrets Manager is not a password manager
+
+LightBWS implements the Bitwarden Secrets Manager workflow. A secrets manager and a password manager both protect sensitive values, but they serve different users and operating models.
+
+| | Password manager | Secrets Manager / LightBWS |
+| --- | --- | --- |
+| Primary user | People, families, and office teams | Applications, machine accounts, developers, DevOps, and CI/CD pipelines |
+| Typical data | Website logins, personal passwords, passkeys, and payment details | API keys, database credentials, service tokens, deployment keys, and infrastructure configuration |
+| Access pattern | A person unlocks a vault or uses browser/mobile autofill | Software retrieves selected secrets through an SDK, CLI, API, or environment injection |
+| Integrations | Browsers, desktop apps, and mobile apps | Build pipelines, deployment systems, containers, servers, and automation tools |
+| Control model | Personal or shared vault organization | Project-scoped machine access, team policy, rotation workflows, and audit records |
+
+A password-manager workflow looks like: browser → open a website → autofill a person's login. A Secrets Manager workflow looks like: application or CI pipeline → authenticate as a machine account → retrieve only the required secret → deploy or connect to infrastructure.
+
+Use LightBWS for workloads such as injecting a database URL into a service, supplying an API token to GitHub Actions, or managing deployment credentials for a homelab. It is not a replacement for Bitwarden Password Manager: LightBWS does not provide a personal vault, browser autofill, passkey management, family password sharing, or breach monitoring. The two products are complementary. Password Manager protects credentials used by people, while Secrets Manager delivers credentials to software and automation.
+
 ## Screenshots
 
 ![LightBWS login](screenshoot/login-en.png)
@@ -21,8 +37,8 @@ LightBWS is a persistent, self-hosted Bitwarden Secrets Manager server. It combi
 - Audit collection controls with automatic retention cleanup, manual clearing, and a full off switch.
 - Cookie sessions, CSRF protection, Argon2id passwords, encrypted backup credentials, and hardened response headers.
 - Chinese and English UI with seven built-in Astryx themes and system, light, and dark color modes.
-- Portable passphrase-encrypted import and export.
-- Scheduled encrypted backups to S3-compatible storage and WebDAV.
+- Portable scoped import and export with passphrase encryption by default.
+- Scoped S3-compatible and WebDAV backups, encrypted by default with explicitly gated plaintext support.
 - Frontend embedded into every release binary. No separate Web server is required.
 - Linux GNU/musl, macOS, and Windows release archives plus multi-architecture GHCR and Docker Hub images.
 
@@ -61,7 +77,7 @@ docker compose pull
 docker compose up -d
 ```
 
-Set `LIGHTBWS_IMAGE=ghcr.io/ca-x/lightbws:0.1.1` in `.env` when a deployment must remain pinned to a specific release. Running `docker compose down` keeps the data volume; `docker compose down -v` permanently deletes it.
+Set `LIGHTBWS_IMAGE=ghcr.io/ca-x/lightbws:0.2.0` in `.env` when a deployment must remain pinned to a specific release. Running `docker compose down` keeps the data volume; `docker compose down -v` permanently deletes it.
 
 ### Release binary
 
@@ -96,12 +112,27 @@ The remaining values are passed into the LightBWS container:
 | `LIGHTBWS_ADMIN_PASSWORD` | none | Initial administrator password, minimum 8 characters. |
 | `LIGHTBWS_COOKIE_SECURE` | `false` | Require HTTPS for Web session cookies. Enable behind an HTTPS reverse proxy. |
 | `LIGHTBWS_ENABLE_UPSTREAM_COMPATIBILITY_ACCOUNT` | `false` | Create the upstream SDK test fixtures' publicly known fixed credentials. Never enable it on a shared or internet-facing deployment. |
-| `LIGHTBWS_MASTER_KEY` | generated | Base64url or hexadecimal 32-byte key used to encrypt stored backup credentials. |
+| `LIGHTBWS_MASTER_KEY` | generated | Base64url or hexadecimal 32-byte key used to encrypt stored backup credentials and automatic backup archives. |
+| `LIGHTBWS_ALLOW_PLAINTEXT_BACKUPS` | `false` | Unlock plaintext as an explicit per-export or per-target option. Encrypted mode remains the default. |
 | `RUST_LOG` | `lightbws=info,tower_http=info` | Structured log filter. |
 
 The image already sets `LIGHTBWS_BIND=0.0.0.0:8080` and `LIGHTBWS_DATA_DIR=/data`. Native binary deployments can override both runtime variables; Compose normally changes the host mapping through `LIGHTBWS_LISTEN_ADDRESS` and `LIGHTBWS_PORT` instead.
 
-If `LIGHTBWS_MASTER_KEY` is not set, LightBWS creates `master.key` with owner-only permissions in the data directory. Persist this file together with the SQLite database. Remote backup files cannot be recovered without it.
+If `LIGHTBWS_MASTER_KEY` is not set, LightBWS securely generates a key and writes it to `master.key` in the data directory with owner-only permissions (`0600` on Unix). This is the recommended setup. Persist the file together with the SQLite database.
+
+When setting `LIGHTBWS_MASTER_KEY` explicitly, provide exactly 32 random bytes (256 bits), not an arbitrary 32-character string. LightBWS accepts either 64 hexadecimal characters or an unpadded Base64url value, which is normally 43 characters for a 32-byte key. For example, generate the simpler hexadecimal form with:
+
+```bash
+openssl rand -hex 32
+```
+
+To generate an unpadded Base64url value instead:
+
+```bash
+openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n'
+```
+
+Keep the key secret and back it up separately. Do not rotate or replace it without re-encrypting the protected data. Losing or changing the key makes existing stored backup credentials and encrypted backup files unrecoverable.
 
 ## Access model
 
@@ -179,8 +210,14 @@ The authorization acceptance test uses the same `fnox.toml` throughout:
 
 ## Backups and transfer
 
-- Manual exports use an independent passphrase-derived Argon2id key and are portable between LightBWS installations.
-- Scheduled S3 and WebDAV snapshots are encrypted with the persistent instance master key.
+- The default backup scope contains projects and secrets only. Optional scopes add users/groups/memberships, machine accounts, access policies, audit settings/events, and backup target configuration/credentials. The full-instance preset includes every persistent scope and can rebuild the durable database.
+- Sessions, machine sessions, backup-job history, migration metadata, SQLite WAL state, and `master.key` are never included in an archive.
+- Manual encrypted exports use an independent passphrase-derived Argon2id key and are portable between LightBWS installations. Import them with the same passphrase.
+- Scheduled S3 and WebDAV snapshots are encrypted with the persistent instance master key. To restore one on another instance, provide the source instance's old `master.key`; it is used only to decrypt the selected archive and never replaces the destination key.
+- `master.key` is never embedded in or uploaded with a `.lightbws` archive. Back it up separately. Imported backup credentials are decrypted from the archive and re-encrypted with the destination instance's master key.
+- Imported backup targets are always restored disabled with scheduling off. Review and test each destination before explicitly enabling it. If plaintext capability is disabled on the destination, imported plaintext targets are converted to master-key encryption.
+- Plaintext archives are disabled by default. Set `LIGHTBWS_ALLOW_PLAINTEXT_BACKUPS=true` only to unlock an explicit per-target or per-export plaintext choice; existing and new targets remain encrypted by default. Plaintext files use the `.plain.lightbws` suffix and require confirmation in the Web UI.
+- A plaintext archive needs neither a passphrase nor `master.key` to import. It can also rebuild the durable database when it contains the full-instance scope, but anyone who can read the file can read its secrets and credentials.
 - Remote credentials are AES-256-GCM encrypted in SQLite and are never returned by the API.
 - Backup endpoints must use HTTPS and resolve only to public IP addresses. Redirects are disabled to reduce SSRF risk.
 - S3 uploads use AWS Signature Version 4. WebDAV uploads create required collections and then use `PUT`.
@@ -245,8 +282,8 @@ After CI succeeds on `main`, pushing a semantic `vX.Y.Z` tag starts two release 
 
 ```bash
 git push origin main
-git tag -a v0.1.1 -m "LightBWS v0.1.1"
-git push origin v0.1.1
+git tag -a v0.2.0 -m "LightBWS v0.2.0"
+git push origin v0.2.0
 ```
 
 The Docker workflow builds `linux/amd64` and `linux/arm64` on native GitHub runners, then publishes the same multi-platform tags to `ghcr.io/ca-x/lightbws` and `docker.io/czyt/lightbws`. Repository or organization secrets named `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` are required. Each release archive contains the binary, both language READMEs, and the license, with a companion SHA-256 checksum asset. Frontend files are already embedded in the binary.

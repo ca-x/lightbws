@@ -10,6 +10,8 @@ pub struct Model {
     pub kind: String,
     pub public_config_json: String,
     pub credentials_cipher: String,
+    pub scopes_json: String,
+    pub encryption_mode: String,
     pub enabled: bool,
     pub schedule_enabled: bool,
     pub interval_hours: i32,

@@ -37,6 +37,7 @@ impl Fixture {
             cookie_secure: false,
             upstream_compatibility_account: false,
             master_key: None,
+            allow_plaintext_backups: false,
         };
         let state = AppState::new(db, &config);
         Self {

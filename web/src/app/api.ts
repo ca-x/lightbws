@@ -1,4 +1,4 @@
-import type { AccessPolicy, AccessPolicyInput, AuditEvent, AuditSettings, BackupJob, BackupTarget, Group, IssuedMachineAccount, MachineAccess, MachineAccessInput, MachineAccount, Overview, Project, Role, Secret, Session, User } from "./types"
+import type { AccessPolicy, AccessPolicyInput, AuditEvent, AuditSettings, BackupCapabilities, BackupJob, BackupScopes, BackupTarget, Group, IssuedMachineAccount, MachineAccess, MachineAccessInput, MachineAccount, Overview, Project, Role, Secret, Session, User } from "./types"
 
 export class ApiError extends Error {
   constructor(public status: number, public code: string) { super(code) }
@@ -61,6 +61,7 @@ export const api = {
   machineAccess: (id: string) => request<MachineAccess>(`/machines/${id}/access`),
   updateMachineAccess: (id: string, input: MachineAccessInput) => request<MachineAccess>(`/machines/${id}/access`, json("PUT", input)),
   backupTargets: () => request<BackupTarget[]>("/backups/targets"),
+  backupCapabilities: () => request<BackupCapabilities>("/backups/capabilities"),
   createBackupTarget: (input: unknown) => request<BackupTarget>("/backups/targets", json("POST", input)),
   updateBackupTarget: (id: string, input: unknown) => request<BackupTarget>(`/backups/targets/${id}`, json("PUT", input)),
   deleteBackupTarget: (id: string) => request<void>(`/backups/targets/${id}`, { method: "DELETE" }),
@@ -71,10 +72,10 @@ export const api = {
   auditSettings: () => request<AuditSettings>("/audit/settings"),
   updateAuditSettings: (input: { enabled: boolean; autoCleanupEnabled: boolean; retentionDays: number }) => request<AuditSettings>("/audit/settings", json("PUT", input)),
   clearAudit: () => request<{ deleted: number }>("/audit", { method: "DELETE" }),
-  async export(passphrase: string) {
-    const response = await fetch("/api/v1/transfer/export", { ...json("POST", { passphrase }), headers: { "content-type": "application/json", "x-csrf-token": csrfToken } })
+  async export(input: { passphrase?: string; scopes: BackupScopes; plaintext: boolean; confirmPlaintext: boolean }) {
+    const response = await fetch("/api/v1/transfer/export", { ...json("POST", input), headers: { "content-type": "application/json", "x-csrf-token": csrfToken } })
     if (!response.ok) throw new ApiError(response.status, "EXPORT_FAILED")
     return response.blob()
   },
-  import: (passphrase: string, dataBase64: string) => request<{ imported: { projects: number; secrets: number } }>("/transfer/import", json("POST", { passphrase, dataBase64 })),
+  import: (input: { passphrase?: string; masterKey?: string; dataBase64: string; replace: boolean }) => request<{ imported: { projects: number; secrets: number; fullInstance: boolean } }>("/transfer/import", json("POST", input)),
 }

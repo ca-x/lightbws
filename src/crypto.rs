@@ -43,10 +43,13 @@ impl MasterKey {
     }
 
     pub fn parse(value: &str) -> Result<Self> {
-        let decoded = URL_SAFE_NO_PAD
-            .decode(value)
-            .or_else(|_| hex::decode(value))
-            .context("invalid key encoding")?;
+        let decoded = if value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            hex::decode(value).context("invalid hexadecimal key")?
+        } else {
+            URL_SAFE_NO_PAD
+                .decode(value)
+                .context("invalid Base64url key")?
+        };
         let bytes: [u8; 32] = decoded
             .try_into()
             .map_err(|_| anyhow::anyhow!("master key must contain exactly 32 bytes"))?;
@@ -129,5 +132,12 @@ mod tests {
         let ciphertext = key.encrypt(b"target-a", b"secret").unwrap();
         assert_eq!(key.decrypt(b"target-a", &ciphertext).unwrap(), b"secret");
         assert!(key.decrypt(b"target-b", &ciphertext).is_err());
+    }
+
+    #[test]
+    fn parses_documented_hexadecimal_and_base64url_keys() {
+        assert!(MasterKey::parse(&"11".repeat(32)).is_ok());
+        assert!(MasterKey::parse("ERERERERERERERERERERERERERERERERERERERERERE").is_ok());
+        assert!(MasterKey::parse(&"1".repeat(32)).is_err());
     }
 }

@@ -4,6 +4,22 @@ LightBWS 是一个可持久化、自托管的 Bitwarden Secrets Manager server�
 
 [English](README.md)
 
+## Secrets Manager 不是密码管理器
+
+LightBWS 实现的是 Bitwarden Secrets Manager 工作流。Secrets Manager 和密码管理器都会保护敏感数据，但它们面向的用户、接入方式和使用场景完全不同。
+
+| 维度 | 密码管理器 | Secrets Manager / LightBWS |
+| --- | --- | --- |
+| 主要用户 | 个人、家庭和办公团队 | 应用程序、机器账户、开发者、DevOps 和 CI/CD 流水线 |
+| 常见数据 | 网站账号密码、个人密码、Passkey 和支付信息 | API Key、数据库凭据、服务令牌、部署密钥和基础设施配置 |
+| 访问方式 | 人在解锁保险库后手动复制，或使用浏览器、移动端自动填充 | 程序通过 SDK、CLI、API 或环境变量注入读取指定密钥 |
+| 集成对象 | 浏览器、桌面客户端和移动 App | 构建流水线、部署系统、容器、服务器和自动化工具 |
+| 权限与审计 | 以个人保险库或共享保险库为中心 | 以项目、机器账户、团队授权、轮换流程和审计记录为中心 |
+
+密码管理器的典型流程是：浏览器 → 打开网站 → 自动填充某个人的登录信息。Secrets Manager 的典型流程是：应用或 CI 流水线 → 使用机器账户认证 → 只读取本次任务需要的密钥 → 部署应用或连接基础设施。
+
+LightBWS 适合为服务注入数据库连接地址、向 GitHub Actions 提供 API 令牌，或者管理 Homelab 中的部署凭据。它不能替代 Bitwarden Password Manager：LightBWS 不提供个人密码保险库、浏览器自动填充、Passkey 管理、家庭密码共享或数据泄露监控。两类产品可以配合使用。密码管理器保护“人使用的凭据”，Secrets Manager 负责把“软件需要的凭据”安全地交给程序和自动化流程。
+
 ## 界面截图
 
 ![LightBWS 登录界面](screenshoot/login-zh.png)
@@ -21,8 +37,8 @@ LightBWS 是一个可持久化、自托管的 Bitwarden Secrets Manager server�
 - 审计日志支持关闭记录、按保留天数自动清理和手动清空。
 - 使用 Cookie 会话、CSRF 防护、Argon2id 密码、加密备份凭据和安全响应头。
 - Web 界面支持中文和英文，提供 7 个 Astryx 内置主题，以及跟随系统、浅色和深色模式。
-- 支持使用口令加密的可移植导入导出。
-- 支持将加密备份定时写入兼容 S3 的存储和 WebDAV。
+- 支持默认使用口令加密的可移植范围导入导出。
+- 支持将可选范围备份写入兼容 S3 的存储和 WebDAV，默认加密，明文能力需显式开放。
 - 前端已嵌入每个发布二进制，不需要单独的 Web 服务器。
 - 提供 Linux GNU/musl、macOS、Windows 发布压缩包，以及多架构 GHCR 和 Docker Hub 镜像。
 
@@ -61,7 +77,7 @@ docker compose pull
 docker compose up -d
 ```
 
-如果部署需要固定版本，可在 `.env` 中设置 `LIGHTBWS_IMAGE=ghcr.io/ca-x/lightbws:0.1.1`。执行 `docker compose down` 会保留数据卷，执行 `docker compose down -v` 会永久删除数据卷。
+如果部署需要固定版本，可在 `.env` 中设置 `LIGHTBWS_IMAGE=ghcr.io/ca-x/lightbws:0.2.0`。执行 `docker compose down` 会保留数据卷，执行 `docker compose down -v` 会永久删除数据卷。
 
 ### 发布二进制
 
@@ -96,12 +112,27 @@ export LIGHTBWS_ADMIN_PASSWORD='replace-with-a-long-password'
 | `LIGHTBWS_ADMIN_PASSWORD` | 无 | 初始管理员密码，至少 8 个字符。 |
 | `LIGHTBWS_COOKIE_SECURE` | `false` | 要求 Web 会话 Cookie 只通过 HTTPS 传输。使用 HTTPS 反向代理时启用。 |
 | `LIGHTBWS_ENABLE_UPSTREAM_COMPATIBILITY_ACCOUNT` | `false` | 创建上游 SDK 测试夹具使用的公开固定凭据，仅用于兼容性测试。不要在共享或面向互联网的部署中启用。 |
-| `LIGHTBWS_MASTER_KEY` | 自动生成 | 用于加密存储备份凭据的 Base64url 或十六进制 32 字节密钥。 |
+| `LIGHTBWS_MASTER_KEY` | 自动生成 | 用于加密存储备份凭据和自动备份归档的 Base64url 或十六进制 32 字节密钥。 |
+| `LIGHTBWS_ALLOW_PLAINTEXT_BACKUPS` | `false` | 允许在单次导出或备份目标中显式选择明文模式，加密模式仍为默认值。 |
 | `RUST_LOG` | `lightbws=info,tower_http=info` | 结构化日志过滤器。 |
 
 镜像已经设置 `LIGHTBWS_BIND=0.0.0.0:8080` 和 `LIGHTBWS_DATA_DIR=/data`。原生二进制部署可以覆盖这两个运行时变量；Compose 部署通常应通过 `LIGHTBWS_LISTEN_ADDRESS` 和 `LIGHTBWS_PORT` 调整宿主机映射。
 
-如果未设置 `LIGHTBWS_MASTER_KEY`，LightBWS 会在数据目录创建仅所有者可读的 `master.key`。请将它与 SQLite 数据库一起持久化，否则无法恢复远程备份文件。
+如果未设置 `LIGHTBWS_MASTER_KEY`，LightBWS 会使用安全随机源生成密钥，并写入数据目录下的 `master.key`。在 Unix 系统上，该文件权限为仅所有者可读写（`0600`）。建议使用这种默认方式，并将该文件与 SQLite 数据库一起持久化。
+
+如果需要手动设置 `LIGHTBWS_MASTER_KEY`，密钥必须是随机生成的 32 字节（256 bit）数据，不能使用任意 32 字符字符串。LightBWS 支持 64 个十六进制字符，或者不带填充的 Base64url 编码。32 字节密钥编码为 Base64url 后通常是 43 个字符。推荐使用更简单的十六进制格式：
+
+```bash
+openssl rand -hex 32
+```
+
+如需生成不带填充的 Base64url 格式：
+
+```bash
+openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n'
+```
+
+请妥善保管并单独备份主密钥。不要在未重新加密受保护数据的情况下轮换或替换它。密钥一旦丢失或改变，已有的备份凭据和加密备份文件将无法恢复。
 
 ## 权限模型
 
@@ -179,8 +210,14 @@ fnox exec -- npm start
 
 ## 备份和迁移
 
-- 手动导出使用独立的口令派生 Argon2id 密钥，可在不同 LightBWS 实例之间迁移。
-- S3 和 WebDAV 定时快照使用持久化的实例主密钥加密。
+- 默认备份范围只包含项目和密钥。可选范围包括用户、用户组及成员关系、机器账户、授权策略、审计设置和记录，以及备份目标配置和凭据。“完整实例”预设包含全部持久化范围，可以重建持久化数据库。
+- 会话、机器会话、备份任务历史、迁移元数据、SQLite WAL 状态和 `master.key` 永远不会写入归档。
+- 手动加密导出使用独立的口令派生 Argon2id 密钥，可在不同 LightBWS 实例之间迁移；导入时使用同一口令。
+- S3 和 WebDAV 定时快照使用持久化的实例主密钥加密。要在其他实例恢复，请提供来源实例的旧 `master.key`；它只用于解密所选归档，不会替换目标实例的密钥。
+- `.lightbws` 归档永远不会包含或同时上传 `master.key`，请单独备份。归档内的备份目标凭据在导入后会使用目标实例的主密钥重新加密。
+- 导入的备份目标始终处于停用状态，定时任务也会关闭。请逐一检查并测试目标地址，再显式启用。如果目标实例未开放明文能力，导入的明文目标会转换为主密钥加密。
+- 默认禁止明文归档。只有设置 `LIGHTBWS_ALLOW_PLAINTEXT_BACKUPS=true` 后，界面才允许为单次导出或单个备份目标显式选择明文；已有和新建目标仍默认加密。明文文件使用 `.plain.lightbws` 后缀，界面会要求二次确认。
+- 明文归档导入时不需要口令或 `master.key`。如果包含完整实例范围，同样可以重建持久化数据库，但任何能读取该文件的人都能直接读取其中的密钥和凭据。
 - 远程凭据使用 AES-256-GCM 加密保存在 SQLite 中，API 永远不会返回这些凭据。
 - 备份地址必须使用 HTTPS，并且只能解析到公网 IP。程序禁用重定向以降低 SSRF 风险。
 - S3 上传使用 AWS Signature Version 4。WebDAV 上传会先创建所需目录，再使用 `PUT` 上传。
@@ -245,8 +282,8 @@ npm --prefix web audit
 
 ```bash
 git push origin main
-git tag -a v0.1.1 -m "LightBWS v0.1.1"
-git push origin v0.1.1
+git tag -a v0.2.0 -m "LightBWS v0.2.0"
+git push origin v0.2.0
 ```
 
 Docker 工作流会在 GitHub 原生 Runner 上分别构建 `linux/amd64` 和 `linux/arm64`，再将相同的多架构标签发布到 `ghcr.io/ca-x/lightbws` 和 `docker.io/czyt/lightbws`。仓库或组织需要提供 `DOCKERHUB_USERNAME` 和 `DOCKERHUB_TOKEN` 两个 secret。每个发布压缩包包含二进制、两种语言的 README 和许可证，并提供独立的 SHA-256 校验文件。前端文件已经嵌入二进制。

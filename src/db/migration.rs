@@ -5,7 +5,48 @@ pub struct Migrator;
 #[async_trait::async_trait]
 impl MigratorTrait for Migrator {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-        vec![Box::new(InitialMigration)]
+        vec![Box::new(InitialMigration), Box::new(BackupOptionsMigration)]
+    }
+}
+
+struct BackupOptionsMigration;
+
+impl MigrationName for BackupOptionsMigration {
+    fn name(&self) -> &str {
+        "m20260729_000002_backup_options"
+    }
+}
+
+#[async_trait::async_trait]
+impl MigrationTrait for BackupOptionsMigration {
+    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .get_connection()
+            .execute_unprepared(
+                r#"
+                ALTER TABLE backup_targets
+                ADD COLUMN scopes_json TEXT NOT NULL DEFAULT '{}'
+                CHECK(json_valid(scopes_json));
+                ALTER TABLE backup_targets
+                ADD COLUMN encryption_mode TEXT NOT NULL DEFAULT 'master_key'
+                CHECK(encryption_mode IN ('master_key','plaintext'));
+                "#,
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .get_connection()
+            .execute_unprepared(
+                r#"
+                ALTER TABLE backup_targets DROP COLUMN encryption_mode;
+                ALTER TABLE backup_targets DROP COLUMN scopes_json;
+                "#,
+            )
+            .await?;
+        Ok(())
     }
 }
 

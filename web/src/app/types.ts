@@ -31,6 +31,9 @@ export interface MachineAccessInput { users: GrantInput[]; groups: GrantInput[];
 export interface S3Config { endpoint: string; region: string; bucket: string; prefix: string; pathStyle: boolean }
 export interface WebDavConfig { endpoint: string; prefix: string }
 export type BackupConfig = { kind: "S3"; settings: S3Config } | { kind: "WEBDAV"; settings: WebDavConfig }
+export interface BackupScopes { identities: boolean; machineAccounts: boolean; accessPolicies: boolean; audit: boolean; backupTargets: boolean }
+export type BackupEncryption = "masterKey" | "plaintext"
+export interface BackupCapabilities { plaintextAllowed: boolean }
 export interface BackupTarget {
   id: string
   displayName: string
@@ -43,6 +46,8 @@ export interface BackupTarget {
   lastStatus: string | null
   lastError: string | null
   hasCredentials: boolean
+  scopes: BackupScopes
+  encryption: BackupEncryption
   createdAt: number
   updatedAt: number
 }

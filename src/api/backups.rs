@@ -4,6 +4,7 @@ use axum::{
     http::StatusCode,
     routing::get,
 };
+use serde::Serialize;
 use uuid::Uuid;
 
 use crate::{
@@ -26,6 +27,23 @@ pub fn routes() -> Router<AppState> {
         .route("/targets/{id}/test", axum::routing::post(test))
         .route("/targets/{id}/run", axum::routing::post(run))
         .route("/jobs", get(list_jobs))
+        .route("/capabilities", get(capabilities))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BackupCapabilities {
+    plaintext_allowed: bool,
+}
+
+async fn capabilities(
+    State(state): State<AppState>,
+    session: AuthenticatedSession,
+) -> Result<Json<BackupCapabilities>, AppError> {
+    require_admin(&session.user)?;
+    Ok(Json(BackupCapabilities {
+        plaintext_allowed: state.allow_plaintext_backups,
+    }))
 }
 
 async fn list_targets(
@@ -96,5 +114,5 @@ async fn list_jobs(
 }
 
 fn repository(state: &AppState) -> BackupRepository {
-    BackupRepository::new(state.db.clone(), state.master_key.clone())
+    BackupRepository::for_state(state)
 }

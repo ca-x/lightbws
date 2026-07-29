@@ -23,7 +23,7 @@ use crate::{
     },
     domain::{
         now,
-        transfer::{dump_database, encrypt_backup},
+        transfer::{BackupScopes, dump_database_scoped, encode_plain_backup, encrypt_backup},
     },
     error::AppError,
 };
@@ -62,7 +62,7 @@ pub struct WebDavPublicConfig {
     pub prefix: String,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(
     tag = "kind",
     content = "values",
@@ -103,8 +103,37 @@ pub struct BackupTarget {
     pub last_status: Option<String>,
     pub last_error: Option<String>,
     pub has_credentials: bool,
+    pub scopes: BackupScopes,
+    pub encryption: BackupEncryption,
     pub created_at: i64,
     pub updated_at: i64,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BackupEncryption {
+    #[default]
+    MasterKey,
+    Plaintext,
+}
+
+impl BackupEncryption {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::MasterKey => "master_key",
+            Self::Plaintext => "plaintext",
+        }
+    }
+
+    fn parse(value: &str) -> Result<Self, AppError> {
+        match value {
+            "master_key" => Ok(Self::MasterKey),
+            "plaintext" => Ok(Self::Plaintext),
+            _ => Err(AppError::internal(anyhow::anyhow!(
+                "invalid stored backup encryption mode"
+            ))),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -133,6 +162,12 @@ pub struct CreateBackupTarget {
     pub schedule_enabled: bool,
     #[serde(default = "default_interval")]
     pub interval_hours: u16,
+    #[serde(default)]
+    pub scopes: BackupScopes,
+    #[serde(default)]
+    pub encryption: BackupEncryption,
+    #[serde(default)]
+    pub confirm_plaintext: bool,
 }
 
 #[derive(Clone, Deserialize)]
@@ -144,17 +179,38 @@ pub struct UpdateBackupTarget {
     pub enabled: bool,
     pub schedule_enabled: bool,
     pub interval_hours: u16,
+    #[serde(default)]
+    pub scopes: BackupScopes,
+    #[serde(default)]
+    pub encryption: BackupEncryption,
+    #[serde(default)]
+    pub confirm_plaintext: bool,
 }
 
 #[derive(Clone)]
 pub struct BackupRepository {
     db: Database,
     master_key: MasterKey,
+    allow_plaintext: bool,
 }
 
 impl BackupRepository {
     pub fn new(db: Database, master_key: MasterKey) -> Self {
-        Self { db, master_key }
+        Self {
+            db,
+            master_key,
+            allow_plaintext: false,
+        }
+    }
+
+    pub fn with_plaintext_allowed(mut self, allowed: bool) -> Self {
+        self.allow_plaintext = allowed;
+        self
+    }
+
+    pub fn for_state(state: &AppState) -> Self {
+        Self::new(state.db.clone(), state.master_key.clone())
+            .with_plaintext_allowed(state.allow_plaintext_backups)
     }
 
     pub async fn list_targets(&self) -> Result<Vec<BackupTarget>, AppError> {
@@ -176,6 +232,8 @@ impl BackupRepository {
         let config = normalize_public_config(input.config)?;
         validate_credentials(&config, &input.credentials)?;
         validate_interval(input.interval_hours)?;
+        validate_backup_options(input.scopes, input.encryption, self.allow_plaintext)?;
+        validate_plaintext_confirmation(input.encryption, input.confirm_plaintext)?;
         let id = Uuid::new_v4();
         let timestamp = now();
         let credentials = encode_credentials(&input.credentials)?;
@@ -188,6 +246,8 @@ impl BackupRepository {
                 .master_key
                 .encrypt(id.as_bytes(), &credentials)
                 .map_err(AppError::internal)?),
+            scopes_json: Set(serde_json::to_string(&input.scopes).map_err(AppError::internal)?),
+            encryption_mode: Set(input.encryption.as_str().into()),
             enabled: Set(input.enabled),
             schedule_enabled: Set(input.schedule_enabled),
             interval_hours: Set(i32::from(input.interval_hours)),
@@ -213,6 +273,8 @@ impl BackupRepository {
         let display_name = normalize_display_name(&input.display_name)?;
         let config = normalize_public_config(input.config)?;
         validate_interval(input.interval_hours)?;
+        validate_backup_options(input.scopes, input.encryption, self.allow_plaintext)?;
+        validate_plaintext_confirmation(input.encryption, input.confirm_plaintext)?;
         let model = self.get_model(id).await?;
         let mut active = model.into_active_model();
         active.display_name = Set(display_name);
@@ -226,6 +288,8 @@ impl BackupRepository {
                 .encrypt(id.as_bytes(), &encode_credentials(&credentials)?)
                 .map_err(AppError::internal)?);
         }
+        active.scopes_json = Set(serde_json::to_string(&input.scopes).map_err(AppError::internal)?);
+        active.encryption_mode = Set(input.encryption.as_str().into());
         active.enabled = Set(input.enabled);
         active.schedule_enabled = Set(input.schedule_enabled);
         active.interval_hours = Set(i32::from(input.interval_hours));
@@ -292,10 +356,17 @@ impl BackupRepository {
             .decrypt(id.as_bytes(), &model.credentials_cipher)
             .map_err(AppError::internal)?;
         let credentials = decode_credentials(&model.kind, &plaintext)?;
+        let scopes: BackupScopes =
+            serde_json::from_str(&model.scopes_json).map_err(AppError::internal)?;
+        scopes.validate()?;
+        let encryption = BackupEncryption::parse(&model.encryption_mode)?;
+        validate_backup_options(scopes, encryption, self.allow_plaintext)?;
         Ok(ExecutionTarget {
             model,
             config,
             credentials,
+            scopes,
+            encryption,
         })
     }
 }
@@ -304,6 +375,8 @@ struct ExecutionTarget {
     model: backup_target::Model,
     config: BackupPublicConfig,
     credentials: BackupCredentials,
+    scopes: BackupScopes,
+    encryption: BackupEncryption,
 }
 
 pub async fn run_backup(
@@ -311,16 +384,27 @@ pub async fn run_backup(
     target_id: Uuid,
     trigger: &str,
 ) -> Result<BackupJob, AppError> {
-    let repository = BackupRepository::new(state.db.clone(), state.master_key.clone());
+    let _permit = state
+        .backup_permits
+        .acquire()
+        .await
+        .map_err(AppError::internal)?;
+    let repository = BackupRepository::for_state(state);
     let target = repository.execution_target(target_id).await?;
     let job_id = Uuid::new_v4();
     let timestamp = now();
+    let suffix = if target.encryption == BackupEncryption::Plaintext {
+        ".plain.lightbws"
+    } else {
+        ".lightbws"
+    };
     let object_key = format!(
-        "lightbws/{:04}/{:02}/{}-{}.lightbws",
+        "lightbws/{:04}/{:02}/{}-{}{}",
         time::OffsetDateTime::now_utc().year(),
         u8::from(time::OffsetDateTime::now_utc().month()),
         timestamp,
-        job_id
+        job_id,
+        suffix
     );
     let job = backup_job::ActiveModel {
         id: Set(job_id.to_string()),
@@ -336,14 +420,12 @@ pub async fn run_backup(
     .insert(state.db.connection())
     .await
     .map_err(conflict_or_internal)?;
-    let _permit = state
-        .backup_permits
-        .acquire()
-        .await
-        .map_err(AppError::internal)?;
     let result = async {
-        let dump = dump_database(&state.db).await?;
-        let payload = encrypt_backup(&state.master_key, &dump)?;
+        let dump = dump_database_scoped(&state.db, &state.master_key, target.scopes).await?;
+        let payload = match target.encryption {
+            BackupEncryption::MasterKey => encrypt_backup(&state.master_key, &dump)?,
+            BackupEncryption::Plaintext => encode_plain_backup(&dump)?,
+        };
         upload(&target.config, &target.credentials, &object_key, &payload).await?;
         Ok::<usize, AppError>(payload.len())
     }
@@ -412,7 +494,7 @@ pub async fn recover_interrupted_jobs(db: &Database) -> Result<(), AppError> {
 }
 
 pub async fn test_target(state: &AppState, target_id: Uuid) -> Result<(), AppError> {
-    let target = BackupRepository::new(state.db.clone(), state.master_key.clone())
+    let target = BackupRepository::for_state(state)
         .execution_target(target_id)
         .await?;
     let endpoint = Url::parse(target.config.endpoint()).map_err(AppError::internal)?;
@@ -425,7 +507,7 @@ pub async fn scheduler(state: AppState) {
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         interval.tick().await;
-        let repository = BackupRepository::new(state.db.clone(), state.master_key.clone());
+        let repository = BackupRepository::for_state(&state);
         match repository.due_target_ids().await {
             Ok(ids) => {
                 for id in ids {
@@ -800,7 +882,7 @@ fn validate_interval(value: u16) -> Result<(), AppError> {
     Ok(())
 }
 
-fn encode_credentials(value: &BackupCredentials) -> Result<Vec<u8>, AppError> {
+pub(crate) fn encode_credentials(value: &BackupCredentials) -> Result<Vec<u8>, AppError> {
     let json = match value {
         BackupCredentials::S3(value) => serde_json::json!({ "kind": "s3", "values": value }),
         BackupCredentials::Webdav(value) => {
@@ -810,7 +892,7 @@ fn encode_credentials(value: &BackupCredentials) -> Result<Vec<u8>, AppError> {
     serde_json::to_vec(&json).map_err(AppError::internal)
 }
 
-fn decode_credentials(kind: &str, value: &[u8]) -> Result<BackupCredentials, AppError> {
+pub(crate) fn decode_credentials(kind: &str, value: &[u8]) -> Result<BackupCredentials, AppError> {
     #[derive(Deserialize)]
     struct Stored<T> {
         values: T,
@@ -829,7 +911,7 @@ fn decode_credentials(kind: &str, value: &[u8]) -> Result<BackupCredentials, App
 }
 
 impl BackupPublicConfig {
-    fn kind(&self) -> &'static str {
+    pub(crate) fn kind(&self) -> &'static str {
         match self {
             Self::S3(_) => "s3",
             Self::Webdav(_) => "webdav",
@@ -858,6 +940,8 @@ impl TryFrom<backup_target::Model> for BackupTarget {
             last_status: value.last_status,
             last_error: value.last_error,
             has_credentials: !value.credentials_cipher.is_empty(),
+            scopes: serde_json::from_str(&value.scopes_json).map_err(AppError::internal)?,
+            encryption: BackupEncryption::parse(&value.encryption_mode)?,
             created_at: value.created_at,
             updated_at: value.updated_at,
         })
@@ -955,6 +1039,51 @@ const fn default_true() -> bool {
 }
 const fn default_interval() -> u16 {
     24
+}
+
+fn validate_backup_options(
+    scopes: BackupScopes,
+    encryption: BackupEncryption,
+    allow_plaintext: bool,
+) -> Result<(), AppError> {
+    scopes.validate()?;
+    if encryption == BackupEncryption::Plaintext && !allow_plaintext {
+        return Err(AppError::Validation(
+            "plaintext backups are disabled by server configuration".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_plaintext_confirmation(
+    encryption: BackupEncryption,
+    confirmed: bool,
+) -> Result<(), AppError> {
+    if encryption == BackupEncryption::Plaintext && !confirmed {
+        return Err(AppError::Validation(
+            "plaintext backups require explicit confirmation".into(),
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_restored_target(
+    display_name: &str,
+    config: BackupPublicConfig,
+    credentials: &BackupCredentials,
+    interval_hours: i32,
+    scopes: BackupScopes,
+    encryption: BackupEncryption,
+    allow_plaintext: bool,
+) -> Result<(String, BackupPublicConfig, u16), AppError> {
+    let display_name = normalize_display_name(display_name)?;
+    let config = normalize_public_config(config)?;
+    validate_credentials(&config, credentials)?;
+    let interval_hours = u16::try_from(interval_hours)
+        .map_err(|_| AppError::Validation("backup interval is invalid".into()))?;
+    validate_interval(interval_hours)?;
+    validate_backup_options(scopes, encryption, allow_plaintext)?;
+    Ok((display_name, config, interval_hours))
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 use sea_orm::entity::prelude::*;
 
-#[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize, DeriveEntityModel)]
 #[sea_orm(table_name = "project_user_grants")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
