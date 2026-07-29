@@ -28,7 +28,7 @@ async fn resources_persist_across_reconnect_and_soft_delete() {
         .await
         .expect("project");
     let secret = SecretRepository::new(db.clone())
-        .create_plain("DATABASE_URL", "sqlite://data", "runtime", Some(project.id))
+        .create_plain("DATABASE_URL", "sqlite://data", "runtime", project.id)
         .await
         .expect("secret");
     let machine = MachineRepository::new(db.clone())
@@ -154,7 +154,7 @@ async fn web_and_sdk_representations_remain_mutually_exclusive() {
 
     let secrets = SecretRepository::new(db);
     let secret = secrets
-        .create_plain("TOKEN", "plain-value", "plain-note", Some(project.id))
+        .create_plain("TOKEN", "plain-value", "plain-note", project.id)
         .await
         .expect("plain secret");
     let cipher_secret = secrets
@@ -163,7 +163,7 @@ async fn web_and_sdk_representations_remain_mutually_exclusive() {
             "2.key-ciphertext".into(),
             "2.value-ciphertext".into(),
             "2.note-ciphertext".into(),
-            Some(project.id),
+            project.id,
         )
         .await
         .expect("cipher secret");
@@ -176,7 +176,7 @@ async fn web_and_sdk_representations_remain_mutually_exclusive() {
             "TOKEN_NEW",
             "new-plain-value",
             "new-plain-note",
-            Some(project.id),
+            project.id,
         )
         .await
         .expect("plain secret update");

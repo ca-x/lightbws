@@ -11,6 +11,8 @@ use crate::{
     AppState,
     auth::{MutationSession, require_admin, revoke_user_sessions},
     domain::{
+        audit::{AuditActor, AuditRepository},
+        groups::{Group, GroupRepository},
         machines::{IssuedMachineAccount, MachineAccount, MachineRepository},
         users::{PublicUser, Role, UserRepository},
     },
@@ -44,6 +46,17 @@ struct CreateMachineInput {
     name: String,
 }
 
+#[derive(Deserialize)]
+struct GroupInput {
+    name: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GroupMembersInput {
+    member_ids: Vec<Uuid>,
+}
+
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/users", get(list_users).post(create_user))
@@ -56,6 +69,84 @@ pub fn routes() -> Router<AppState> {
             axum::routing::put(restore_machine),
         )
         .route("/machines/{id}", axum::routing::delete(delete_machine))
+        .route("/groups", get(list_groups).post(create_group))
+        .route(
+            "/groups/{id}",
+            axum::routing::put(update_group).delete(delete_group),
+        )
+        .route(
+            "/groups/{id}/members",
+            get(get_group_members).put(replace_group_members),
+        )
+}
+
+async fn list_groups(
+    State(state): State<AppState>,
+    session: crate::auth::AuthenticatedSession,
+) -> Result<Json<Vec<Group>>, AppError> {
+    require_admin(&session.user)?;
+    Ok(Json(GroupRepository::new(state.db).list().await?))
+}
+
+async fn create_group(
+    State(state): State<AppState>,
+    mutation: MutationSession,
+    Json(input): Json<GroupInput>,
+) -> Result<(StatusCode, Json<Group>), AppError> {
+    require_admin(&mutation.0.user)?;
+    let group = GroupRepository::new(state.db.clone())
+        .create(&input.name)
+        .await?;
+    record_admin_event(&state, &mutation, "group.create", "group", group.id).await?;
+    Ok((StatusCode::CREATED, Json(group)))
+}
+
+async fn update_group(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    mutation: MutationSession,
+    Json(input): Json<GroupInput>,
+) -> Result<Json<Group>, AppError> {
+    require_admin(&mutation.0.user)?;
+    let group = GroupRepository::new(state.db.clone())
+        .update(id, &input.name)
+        .await?;
+    record_admin_event(&state, &mutation, "group.update", "group", id).await?;
+    Ok(Json(group))
+}
+
+async fn delete_group(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    mutation: MutationSession,
+) -> Result<StatusCode, AppError> {
+    require_admin(&mutation.0.user)?;
+    GroupRepository::new(state.db.clone()).delete(id).await?;
+    record_admin_event(&state, &mutation, "group.delete", "group", id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn get_group_members(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    session: crate::auth::AuthenticatedSession,
+) -> Result<Json<Group>, AppError> {
+    require_admin(&session.user)?;
+    Ok(Json(GroupRepository::new(state.db).get(id).await?))
+}
+
+async fn replace_group_members(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    mutation: MutationSession,
+    Json(input): Json<GroupMembersInput>,
+) -> Result<Json<Group>, AppError> {
+    require_admin(&mutation.0.user)?;
+    let group = GroupRepository::new(state.db.clone())
+        .replace_members(id, &input.member_ids)
+        .await?;
+    record_admin_event(&state, &mutation, "group.members.replace", "group", id).await?;
+    Ok(Json(group))
 }
 
 async fn list_users(
@@ -72,7 +163,7 @@ async fn create_user(
     Json(input): Json<CreateUserInput>,
 ) -> Result<(StatusCode, Json<PublicUser>), AppError> {
     require_admin(&mutation.0.user)?;
-    let user = UserRepository::new(state.db)
+    let user = UserRepository::new(state.db.clone())
         .create(
             &input.username,
             &input.display_name,
@@ -80,6 +171,7 @@ async fn create_user(
             &input.password,
         )
         .await?;
+    record_admin_event(&state, &mutation, "user.create", "user", user.id).await?;
     Ok((StatusCode::CREATED, Json(user)))
 }
 
@@ -96,6 +188,7 @@ async fn update_user(
     if input.disabled {
         revoke_user_sessions(&state, id).await?;
     }
+    record_admin_event(&state, &mutation, "user.update", "user", id).await?;
     Ok(Json(updated))
 }
 
@@ -110,6 +203,7 @@ async fn reset_password(
         .reset_password(id, &input.password)
         .await?;
     revoke_user_sessions(&state, id).await?;
+    record_admin_event(&state, &mutation, "user.password.reset", "user", id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -127,9 +221,17 @@ async fn create_machine(
     Json(input): Json<CreateMachineInput>,
 ) -> Result<(StatusCode, Json<IssuedMachineAccount>), AppError> {
     require_admin(&mutation.0.user)?;
-    let account = MachineRepository::new(state.db)
+    let account = MachineRepository::new(state.db.clone())
         .issue(&input.name, mutation.0.user_id)
         .await?;
+    record_admin_event(
+        &state,
+        &mutation,
+        "machine.create",
+        "machine",
+        account.account.id,
+    )
+    .await?;
     Ok((StatusCode::CREATED, Json(account)))
 }
 
@@ -139,11 +241,11 @@ async fn revoke_machine(
     mutation: MutationSession,
 ) -> Result<Json<MachineAccount>, AppError> {
     require_admin(&mutation.0.user)?;
-    Ok(Json(
-        MachineRepository::new(state.db)
-            .set_revoked(id, true)
-            .await?,
-    ))
+    let machine = MachineRepository::new(state.db.clone())
+        .set_revoked(id, true)
+        .await?;
+    record_admin_event(&state, &mutation, "machine.revoke", "machine", id).await?;
+    Ok(Json(machine))
 }
 
 async fn restore_machine(
@@ -152,11 +254,11 @@ async fn restore_machine(
     mutation: MutationSession,
 ) -> Result<Json<MachineAccount>, AppError> {
     require_admin(&mutation.0.user)?;
-    Ok(Json(
-        MachineRepository::new(state.db)
-            .set_revoked(id, false)
-            .await?,
-    ))
+    let machine = MachineRepository::new(state.db.clone())
+        .set_revoked(id, false)
+        .await?;
+    record_admin_event(&state, &mutation, "machine.restore", "machine", id).await?;
+    Ok(Json(machine))
 }
 
 async fn delete_machine(
@@ -165,6 +267,25 @@ async fn delete_machine(
     mutation: MutationSession,
 ) -> Result<StatusCode, AppError> {
     require_admin(&mutation.0.user)?;
-    MachineRepository::new(state.db).delete(id).await?;
+    MachineRepository::new(state.db.clone()).delete(id).await?;
+    record_admin_event(&state, &mutation, "machine.delete", "machine", id).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn record_admin_event(
+    state: &AppState,
+    mutation: &MutationSession,
+    action: &str,
+    resource_kind: &str,
+    resource_id: Uuid,
+) -> Result<(), AppError> {
+    AuditRepository::new(state.db.clone())
+        .record(
+            AuditActor::User(mutation.0.user_id),
+            action,
+            resource_kind,
+            Some(resource_id),
+            "changed",
+        )
+        .await
 }

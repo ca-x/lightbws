@@ -10,11 +10,15 @@ LightBWS is a persistent, self-hosted Bitwarden Secrets Manager server. It combi
 
 ![LightBWS dashboard](screenshoot/dashboard-en.png)
 
+![LightBWS audit retention](screenshoot/audit-en.png)
+
 ## Features
 
 - Persistent SQLite database with WAL, foreign keys, and safe concurrent access.
-- Administrator bootstrap from environment variables and Web user management.
+- Administrator bootstrap from environment variables, Web user management, and groups.
+- Project and direct-secret grants for users, groups, and machine accounts with read or read/write access.
 - Projects, secrets, machine accounts, soft-delete trash, and one-time access-token display.
+- Audit collection controls with automatic retention cleanup, manual clearing, and a full off switch.
 - Cookie sessions, CSRF protection, Argon2id passwords, encrypted backup credentials, and hardened response headers.
 - Chinese and English UI with seven built-in Astryx themes and system, light, and dark color modes.
 - Portable passphrase-encrypted import and export.
@@ -57,7 +61,7 @@ docker compose pull
 docker compose up -d
 ```
 
-Set `LIGHTBWS_IMAGE=ghcr.io/ca-x/lightbws:0.1.0` in `.env` when a deployment must remain pinned to a specific release. Running `docker compose down` keeps the data volume; `docker compose down -v` permanently deletes it.
+Set `LIGHTBWS_IMAGE=ghcr.io/ca-x/lightbws:0.1.1` in `.env` when a deployment must remain pinned to a specific release. Running `docker compose down` keeps the data volume; `docker compose down -v` permanently deletes it.
 
 ### Release binary
 
@@ -99,6 +103,28 @@ The image already sets `LIGHTBWS_BIND=0.0.0.0:8080` and `LIGHTBWS_DATA_DIR=/data
 
 If `LIGHTBWS_MASTER_KEY` is not set, LightBWS creates `master.key` with owner-only permissions in the data directory. Persist this file together with the SQLite database. Remote backup files cannot be recovered without it.
 
+## Access model
+
+LightBWS follows the Bitwarden Secrets Manager model. It has one organization boundary and no personal secret space. Every secret belongs to exactly one project.
+
+| Entity | Purpose | Access |
+| --- | --- | --- |
+| Project | Groups related secrets and provides the main permission boundary. | Users, groups, and machine accounts receive read or read/write access. |
+| Machine account | Represents CI/CD, applications, and other non-human clients. | Uses a one-time access token and can receive different permissions for each project. |
+| Secret | Stores one sensitive key/value pair inside a project. | Direct user, group, or machine grants can add read or read/write access to the project permission. |
+
+Administrators manage users, groups, machine accounts, projects, and grants. Members see only the projects and secrets they can read. Write controls whether they can create, edit, move, or delete secrets. Group membership is evaluated on every request, so permission changes take effect without restarting the server or client.
+
+## Audit log
+
+Administrators can manage audit retention from the Web UI:
+
+- Disable collection without deleting existing history.
+- Enable hourly cleanup and choose a retention period from 1 to 3650 days.
+- Clear all audit events manually after confirmation.
+
+Audit events contain actor, action, resource identifier, outcome, and timestamp metadata. Secret values are never written to the audit log. The database blocks normal updates and deletes against audit events; cleanup opens a transaction-scoped deletion guard.
+
 ## SDK and BWS
 
 LightBWS implements the Secrets Manager routes used by the official SDK and persists the ciphertext sent by the client. Create a machine account in the Web UI, copy its one-time credential, and point the client at the LightBWS base URL. Credential exchange issues a random one-hour bearer token whose digest is stored in SQLite. Every SDK request checks expiry and the machine account's current revocation state.
@@ -107,8 +133,10 @@ Normal deployments must use machine accounts created in the Web UI. `LIGHTBWS_EN
 
 ```bash
 export BWS_ACCESS_TOKEN='0.<client-id>.<client-secret>:X8vbvA0bduihIDe/qrzIQQ=='
-bws --server-url http://127.0.0.1:8080 project list
+bws --server-url https://lightbws.example.com project list
 ```
+
+Release builds of the official SDK and `bws` require HTTPS. Use an HTTPS reverse proxy for deployed instances. The repository's debug SDK demo can use local HTTP for development.
 
 An official Rust SDK round-trip demo is provided in `demo/sdk-demo`:
 
@@ -118,7 +146,7 @@ BWS_ACCESS_TOKEN="$BWS_ACCESS_TOKEN" \
 cargo run --manifest-path demo/sdk-demo/Cargo.toml
 ```
 
-The acceptance demo authenticates, creates a project and secret, reads and lists them, then removes the test records.
+The acceptance demo authenticates, creates a project and secret, reads and lists them, then removes the test records. The machine account must already have read/write access to at least one project.
 
 SDK-created values remain Bitwarden ciphertext in SQLite and are decrypted by the SDK client. Web-created values use the authenticated Web trust boundary and are intentionally not exposed through SDK ciphertext responses. The UI labels SDK-owned records accordingly.
 
@@ -140,6 +168,14 @@ export BWS_SERVER_URL='https://lightbws.example.com'
 fnox get DATABASE_URL
 fnox exec -- npm start
 ```
+
+The authorization acceptance test uses the same `fnox.toml` throughout:
+
+1. Read/write and read-only project grants both allow `fnox get DATABASE_URL`.
+2. Removing the project grant takes effect on the next command and returns `secret_not_found`.
+3. Restoring read access makes the same command succeed again.
+4. Revoking the machine account invalidates its active SDK sessions and the next command returns HTTP 401.
+5. Re-enabling the account restores access without changing the project policy or token.
 
 ## Backups and transfer
 
@@ -201,15 +237,15 @@ cargo audit
 npm --prefix web audit
 ```
 
-Runtime acceptance additionally covers the official Rust SDK create/read/list/delete round trip, `bws` and Fnox project-scoped secret retrieval, administrator and user-management flows in `agent-browser`, an empty browser console, and an Axe accessibility scan.
+Runtime acceptance additionally covers the official Rust SDK create/read/list/delete round trip, `bws` and Fnox project-scoped secret retrieval over HTTPS, administrator and member permission flows in `agent-browser`, audit cleanup controls, an empty browser console, and an Axe accessibility scan across all Astryx themes.
 
 ## Publishing
 
-After CI succeeds on `main`, the Docker workflow publishes the `latest` and commit-SHA tags. Pushing a semantic `vX.Y.Z` tag first validates every package version and reruns the complete test suite. Only after every binary and multi-architecture image succeeds does one final job create the GitHub Release:
+After CI succeeds on `main`, pushing a semantic `vX.Y.Z` tag starts two release workflows. The Release workflow validates every package version, reruns the complete test suite, builds all platform archives, and creates the GitHub Release. In parallel, the Docker workflow publishes the version, major-minor, `latest`, and commit-SHA tags to GHCR and Docker Hub after both architecture images succeed.
 
 ```bash
-git tag -a v0.1.0 -m "LightBWS v0.1.0"
 git push origin main
+git tag -a v0.1.1 -m "LightBWS v0.1.1"
 git push origin v0.1.1
 ```
 

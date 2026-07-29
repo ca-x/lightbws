@@ -3,6 +3,7 @@ use uuid::Uuid;
 
 use crate::{
     db::entities::{project, secret},
+    domain::ORGANIZATION_ID,
     error::AppError,
 };
 
@@ -58,6 +59,7 @@ pub struct CreateSecretRequest {
     pub note: String,
     #[serde(alias = "project_ids")]
     pub project_ids: Option<Vec<Uuid>>,
+    pub access_policies_requests: Option<SecretAccessPoliciesRequests>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -68,8 +70,25 @@ pub struct UpdateSecretRequest {
     #[serde(default)]
     pub note: String,
     pub project_ids: Option<Vec<Uuid>>,
+    pub access_policies_requests: Option<SecretAccessPoliciesRequests>,
     #[serde(default)]
     pub value_changed: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccessPolicyRequest {
+    pub grantee_id: Uuid,
+    pub read: bool,
+    pub write: bool,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretAccessPoliciesRequests {
+    pub user_access_policy_requests: Option<Vec<AccessPolicyRequest>>,
+    pub group_access_policy_requests: Option<Vec<AccessPolicyRequest>>,
+    pub service_account_access_policy_requests: Option<Vec<AccessPolicyRequest>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -120,8 +139,8 @@ impl TryFrom<secret::Model> for SdkSecret {
     fn try_from(value: secret::Model) -> Result<Self, Self::Error> {
         Ok(Self {
             id: parse_uuid(&value.id)?,
-            organization_id: parse_uuid(&value.organization_id)?,
-            project_id: value.project_id.map(|id| parse_uuid(&id)).transpose()?,
+            organization_id: parse_uuid(ORGANIZATION_ID)?,
+            project_id: Some(parse_uuid(&value.project_id)?),
             key: value.key_cipher.ok_or(AppError::NotFound)?,
             value: value.value_cipher.ok_or(AppError::NotFound)?,
             note: value.note_cipher.unwrap_or_default(),

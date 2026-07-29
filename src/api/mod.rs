@@ -1,3 +1,4 @@
+pub mod access;
 pub mod admin;
 pub mod auth;
 pub mod backups;
@@ -15,5 +16,6 @@ pub fn routes() -> Router<AppState> {
         .nest("/admin", admin::routes())
         .nest("/backups", backups::routes())
         .nest("/transfer", transfer::routes())
+        .merge(access::web_routes())
         .merge(web_data::routes())
 }

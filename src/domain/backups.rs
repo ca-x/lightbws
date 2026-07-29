@@ -390,10 +390,10 @@ pub async fn recover_interrupted_jobs(db: &Database) -> Result<(), AppError> {
             DatabaseBackend::Sqlite,
             r#"
             UPDATE backup_targets
-            SET last_status = 'failed', last_error = 'interrupted', updated_at = ?
+            SET last_run_at = ?, last_status = 'failed', last_error = 'interrupted', updated_at = ?
             WHERE id IN (SELECT target_id FROM backup_jobs WHERE status = 'running')
             "#,
-            [timestamp.into()],
+            [timestamp.into(), timestamp.into()],
         ))
         .await?;
     transaction

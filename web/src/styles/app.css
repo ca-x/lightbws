@@ -175,8 +175,11 @@ tbody tr { transition: background-color 140ms ease; }
 .status-pill i { width: 0.42rem; height: 0.42rem; border-radius: 50%; background: var(--success); }
 .status-pill[data-status="failed"] i,
 .status-pill[data-status="disabled"] i,
-.status-pill[data-status="revoked"] i { background: var(--danger); }
+.status-pill[data-status="revoked"] i,
+.status-pill[data-status="denied"] i { background: var(--danger); }
 .status-pill[data-status="running"] i { background: var(--warning); }
+.status-pill[data-status="changed"] i,
+.status-pill[data-status="readOnly"] i { background: var(--warning); }
 
 .modal-backdrop { position: fixed; z-index: 100; inset: 0; display: grid; place-items: center; overflow-y: auto; background: var(--overlay); padding: max(1rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right)) max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left)); opacity: 1; transition: opacity var(--duration-layer) var(--ease-out); }
 .modal { width: min(100%, 31rem); max-height: calc(100dvh - 2rem); overflow-y: auto; border: 1px solid var(--line-strong); border-radius: var(--radius-panel); background: var(--surface); color: var(--ink); padding: clamp(1rem, 4vw, 1.5rem); box-shadow: 0 1.5rem 5rem color-mix(in srgb, var(--shadow) 70%, transparent); transform: translateY(0) scale(1); opacity: 1; transition: transform var(--duration-layer) var(--ease-out), opacity var(--duration-layer) var(--ease-out); }
@@ -218,6 +221,30 @@ tbody tr { transition: background-color 140ms ease; }
 .settings-stack { display: grid; gap: 1rem; }
 .settings-panel { display: grid; gap: 1.5rem; }
 .settings-panel > div:first-child > p:last-child { margin-block-end: 0; font-size: 0.78rem; }
+.audit-settings-panel { margin-block-end: 1rem; }
+.audit-settings-panel small { display: block; margin-block-start: 0.75rem; color: var(--ink-muted); font-size: 0.68rem; }
+.audit-settings-actions { display: flex; justify-content: flex-end; }
+.audit-identity { display: grid; gap: 0.2rem; }
+.audit-identity code { color: var(--ink-muted); font-size: 0.65rem; }
+.member-picker { display: grid; max-height: min(28rem, 55dvh); overflow-y: auto; border: 1px solid var(--line); border-radius: var(--radius-control); }
+.member-option { display: grid; grid-template-columns: auto auto minmax(0, 1fr); align-items: center; gap: 0.75rem; min-height: 3.8rem; border-block-end: 1px solid var(--line); padding: 0.65rem 0.8rem; cursor: pointer; }
+.member-option:last-child { border-block-end: 0; }
+.member-option > span:last-child,
+.member-option strong,
+.member-option small { display: block; }
+.member-option small { color: var(--ink-muted); font-size: 0.68rem; }
+.access-loading { display: flex; min-height: 14rem; align-items: center; justify-content: center; gap: 0.65rem; color: var(--ink-muted); }
+.access-loading svg { width: 1rem; animation: access-spin 900ms linear infinite; }
+.access-section { display: grid; gap: 0.65rem; }
+.access-section h3 { margin: 0; color: var(--ink-muted); font-family: var(--font-code); font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; }
+.access-list { border: 1px solid var(--line); border-radius: var(--radius-control); overflow: hidden; }
+.access-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(8.5rem, 0.34fr); align-items: center; gap: 1rem; min-height: 3.8rem; border-block-end: 1px solid var(--line); padding: 0.65rem 0.8rem; }
+.access-row:last-child { border-block-end: 0; }
+.access-row strong,
+.access-row small { display: block; }
+.access-row small { max-width: 26rem; overflow: hidden; color: var(--ink-muted); font-family: var(--font-code); font-size: 0.65rem; text-overflow: ellipsis; white-space: nowrap; }
+.access-row select { width: 100%; min-height: 2.4rem; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--surface-muted); color: var(--ink); padding-inline: 0.65rem; font: inherit; font-size: 0.72rem; }
+@keyframes access-spin { to { transform: rotate(360deg); } }
 .choice-grid { display: grid; gap: 0.65rem; }
 .choice-card { position: relative; display: grid; grid-template-columns: 1.4rem minmax(0, 1fr) 1rem; align-items: center; gap: 0.65rem; min-height: 3.75rem; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--surface-muted); color: var(--ink); padding-inline: 1rem; cursor: pointer; text-align: start; transition: transform var(--duration-press) var(--ease-out), border-color 150ms ease, background-color 150ms ease, color 150ms ease; }
 .choice-card > svg { width: 1rem; }

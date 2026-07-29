@@ -19,6 +19,7 @@ use sea_orm::EntityTrait;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use tower::ServiceExt;
+use uuid::Uuid;
 
 struct Fixture {
     _data: TempDir,
@@ -60,6 +61,11 @@ impl Fixture {
     }
 
     async fn bearer(&self) -> String {
+        self.bearer_for(UPSTREAM_CLIENT_ID, UPSTREAM_CLIENT_SECRET)
+            .await
+    }
+
+    async fn bearer_for(&self, client_id: &str, client_secret: &str) -> String {
         let response = self
             .request(
                 Request::builder()
@@ -67,7 +73,7 @@ impl Fixture {
                     .uri("/identity/connect/token")
                     .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                     .body(Body::from(format!(
-                        "grant_type=client_credentials&scope=api.secrets&client_id={UPSTREAM_CLIENT_ID}&client_secret={UPSTREAM_CLIENT_SECRET}"
+                        "grant_type=client_credentials&scope=api.secrets&client_id={client_id}&client_secret={client_secret}"
                     )))
                     .unwrap(),
             )
@@ -78,6 +84,222 @@ impl Fixture {
             .expect("access token")
             .to_owned()
     }
+}
+
+#[tokio::test]
+async fn sdk_access_policies_scope_regular_machines_and_support_direct_secret_access() {
+    let fixture = Fixture::new().await;
+    let compatibility_bearer = fixture.bearer().await;
+    let first_project =
+        create_sdk_project(&fixture, &compatibility_bearer, "2.first-project").await;
+    let second_project =
+        create_sdk_project(&fixture, &compatibility_bearer, "2.second-project").await;
+    let first_secret = create_sdk_secret(
+        &fixture,
+        &compatibility_bearer,
+        first_project,
+        "2.first-key",
+    )
+    .await;
+    let second_secret = create_sdk_secret(
+        &fixture,
+        &compatibility_bearer,
+        second_project,
+        "2.second-key",
+    )
+    .await;
+    let admin = UserRepository::new(fixture.db.clone())
+        .list()
+        .await
+        .expect("users")
+        .into_iter()
+        .find(|user| user.role == Role::Admin)
+        .expect("admin");
+    let issued = MachineRepository::new(fixture.db.clone())
+        .issue("scoped-sdk", admin.id)
+        .await
+        .expect("machine");
+    let client_secret = issued
+        .access_token
+        .split('.')
+        .nth(2)
+        .and_then(|part| part.split(':').next())
+        .expect("client secret")
+        .to_owned();
+
+    let grants = fixture
+        .request(json_request(
+            Method::PUT,
+            &format!(
+                "/api/service-accounts/{}/granted-policies",
+                issued.account.id
+            ),
+            Some(json!({
+                "projectGrantedPolicyRequests": [{
+                    "grantedId": first_project,
+                    "read": true,
+                    "write": false
+                }]
+            })),
+            Some(&compatibility_bearer),
+        ))
+        .await;
+    assert_eq!(grants.status(), StatusCode::OK);
+    assert_eq!(
+        response_json(grants).await["grantedProjectPolicies"][0]["accessPolicy"]["read"],
+        true
+    );
+
+    let scoped_bearer = fixture
+        .bearer_for(&issued.account.client_id.to_string(), &client_secret)
+        .await;
+    let projects = fixture
+        .request(json_request(
+            Method::GET,
+            &format!("/api/organizations/{ORGANIZATION_ID}/projects"),
+            None,
+            Some(&scoped_bearer),
+        ))
+        .await;
+    let projects = response_json(projects).await;
+    assert_eq!(projects["data"].as_array().unwrap().len(), 1);
+    assert_eq!(projects["data"][0]["id"], first_project.to_string());
+
+    let readable = fixture
+        .request(json_request(
+            Method::GET,
+            &format!("/api/secrets/{first_secret}"),
+            None,
+            Some(&scoped_bearer),
+        ))
+        .await;
+    assert_eq!(readable.status(), StatusCode::OK);
+    let hidden = fixture
+        .request(json_request(
+            Method::GET,
+            &format!("/api/secrets/{second_secret}"),
+            None,
+            Some(&scoped_bearer),
+        ))
+        .await;
+    assert_eq!(hidden.status(), StatusCode::FORBIDDEN);
+    let read_only_write = fixture
+        .request(json_request(
+            Method::PUT,
+            &format!("/api/secrets/{first_secret}"),
+            Some(json!({
+                "key": "2.denied",
+                "value": "2.denied",
+                "note": "2.denied",
+                "projectIds": [first_project]
+            })),
+            Some(&scoped_bearer),
+        ))
+        .await;
+    assert_eq!(read_only_write.status(), StatusCode::FORBIDDEN);
+
+    let direct_policy = fixture
+        .request(json_request(
+            Method::PUT,
+            &format!("/api/secrets/{second_secret}"),
+            Some(json!({
+                "key": "2.second-key",
+                "value": "2.second-value",
+                "note": "2.second-note",
+                "projectIds": [second_project],
+                "accessPoliciesRequests": {
+                    "userAccessPolicyRequests": [],
+                    "groupAccessPolicyRequests": [],
+                    "serviceAccountAccessPolicyRequests": [{
+                        "granteeId": issued.account.id,
+                        "read": true,
+                        "write": true
+                    }]
+                }
+            })),
+            Some(&compatibility_bearer),
+        ))
+        .await;
+    assert_eq!(direct_policy.status(), StatusCode::OK);
+    let policies = fixture
+        .request(json_request(
+            Method::GET,
+            &format!("/api/secrets/{second_secret}/access-policies"),
+            None,
+            Some(&compatibility_bearer),
+        ))
+        .await;
+    let policies = response_json(policies).await;
+    assert_eq!(
+        policies["serviceAccountAccessPolicies"][0]["serviceAccountId"],
+        issued.account.id.to_string()
+    );
+
+    let direct_read = fixture
+        .request(json_request(
+            Method::GET,
+            &format!("/api/secrets/{second_secret}"),
+            None,
+            Some(&scoped_bearer),
+        ))
+        .await;
+    assert_eq!(direct_read.status(), StatusCode::OK);
+    let direct_write = fixture
+        .request(json_request(
+            Method::PUT,
+            &format!("/api/secrets/{second_secret}"),
+            Some(json!({
+                "key": "2.direct-updated",
+                "value": "2.direct-updated",
+                "note": "2.direct-updated",
+                "projectIds": [second_project]
+            })),
+            Some(&scoped_bearer),
+        ))
+        .await;
+    assert_eq!(direct_write.status(), StatusCode::OK);
+
+    let synced = fixture
+        .request(json_request(
+            Method::GET,
+            &format!("/api/organizations/{ORGANIZATION_ID}/secrets/sync"),
+            None,
+            Some(&scoped_bearer),
+        ))
+        .await;
+    let synced = response_json(synced).await;
+    assert_eq!(synced["secrets"]["data"].as_array().unwrap().len(), 2);
+}
+
+async fn create_sdk_project(fixture: &Fixture, bearer: &str, name: &str) -> Uuid {
+    let response = fixture
+        .request(json_request(
+            Method::POST,
+            &format!("/api/organizations/{ORGANIZATION_ID}/projects"),
+            Some(json!({ "name": name })),
+            Some(bearer),
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    Uuid::parse_str(response_json(response).await["id"].as_str().unwrap()).unwrap()
+}
+
+async fn create_sdk_secret(fixture: &Fixture, bearer: &str, project_id: Uuid, key: &str) -> Uuid {
+    let response = fixture
+        .request(json_request(
+            Method::POST,
+            &format!("/api/organizations/{ORGANIZATION_ID}/secrets"),
+            Some(json!({
+                "key": key,
+                "value": "2.value",
+                "note": "2.note",
+                "projectIds": [project_id]
+            })),
+            Some(bearer),
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    Uuid::parse_str(response_json(response).await["id"].as_str().unwrap()).unwrap()
 }
 
 #[tokio::test]

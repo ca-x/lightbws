@@ -53,7 +53,7 @@ struct ProjectRecord {
 struct SecretRecord {
     id: String,
     organization_id: String,
-    project_id: Option<String>,
+    project_id: String,
     key_cipher: Option<String>,
     value_cipher: Option<String>,
     note_cipher: Option<String>,
@@ -85,7 +85,7 @@ pub async fn dump_database(db: &Database) -> Result<Vec<u8>, AppError> {
                     + COALESCE(LENGTH(name_plain), 0) + 512
                 ) FROM projects), 0)
                 + COALESCE((SELECT SUM(
-                    LENGTH(id) + LENGTH(organization_id) + COALESCE(LENGTH(project_id), 0)
+                    LENGTH(id) + LENGTH(project_id)
                     + COALESCE(LENGTH(key_cipher), 0) + COALESCE(LENGTH(value_cipher), 0)
                     + COALESCE(LENGTH(note_cipher), 0) + COALESCE(LENGTH(key_plain), 0)
                     + COALESCE(LENGTH(value_plain), 0) + COALESCE(LENGTH(note_plain), 0) + 768
@@ -286,7 +286,7 @@ fn validate_project_record(record: &ProjectRecord) -> Result<(), AppError> {
     if record
         .name_plain
         .as_deref()
-        .is_some_and(|value| value.len() > 2_000)
+        .is_some_and(|value| value.trim().is_empty() || value.chars().count() > 500)
         || record
             .name_cipher
             .as_deref()
@@ -301,30 +301,31 @@ fn validate_project_record(record: &ProjectRecord) -> Result<(), AppError> {
 fn validate_secret_record(record: &SecretRecord) -> Result<(), AppError> {
     uuid::Uuid::parse_str(&record.id)
         .map_err(|_| AppError::Validation("invalid secret identifier".into()))?;
-    if record
-        .project_id
-        .as_deref()
-        .is_some_and(|id| uuid::Uuid::parse_str(id).is_err())
+    if uuid::Uuid::parse_str(&record.project_id).is_err()
         || record
             .key_plain
             .as_deref()
-            .is_some_and(|value| value.len() > 2_000)
+            .is_some_and(|value| value.trim().is_empty() || value.chars().count() > 500)
         || record
             .value_plain
             .as_deref()
-            .is_some_and(|value| value.len() > 2 * 1024 * 1024)
+            .is_some_and(|value| value.len() > 1024 * 1024)
         || record
             .note_plain
             .as_deref()
-            .is_some_and(|value| value.len() > 128 * 1024)
+            .is_some_and(|value| value.len() > 64 * 1024)
         || record
             .key_cipher
             .as_deref()
-            .is_some_and(|value| value.len() > 64 * 1024)
+            .is_some_and(|value| value.is_empty() || value.len() > 32 * 1024)
         || record
             .value_cipher
             .as_deref()
-            .is_some_and(|value| value.len() > 3 * 1024 * 1024)
+            .is_some_and(|value| value.is_empty() || value.len() > 2 * 1024 * 1024)
+        || record
+            .note_cipher
+            .as_deref()
+            .is_some_and(|value| value.len() > 128 * 1024)
         || !valid_secret_mode(record)
     {
         return Err(AppError::Validation("invalid secret record".into()));
@@ -353,7 +354,6 @@ fn apply_secret(
     record: SecretRecord,
     import_revision: Option<i64>,
 ) {
-    active.organization_id = Set(record.organization_id);
     active.project_id = Set(record.project_id);
     active.key_cipher = Set(record.key_cipher);
     active.value_cipher = Set(record.value_cipher);
@@ -388,7 +388,7 @@ impl From<secret::Model> for SecretRecord {
     fn from(value: secret::Model) -> Self {
         Self {
             id: value.id,
-            organization_id: value.organization_id,
+            organization_id: ORGANIZATION_ID.into(),
             project_id: value.project_id,
             key_cipher: value.key_cipher,
             value_cipher: value.value_cipher,

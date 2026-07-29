@@ -1,4 +1,7 @@
+pub mod access;
+pub mod audit;
 pub mod backups;
+pub mod groups;
 pub mod machines;
 pub mod projects;
 pub mod secrets;

@@ -1,64 +1,72 @@
-name: Publish Docker
+name: Docker Build and Push
 
 on:
-  workflow_call:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
     inputs:
-      release:
-        type: boolean
-        required: false
-        default: false
-  workflow_run:
-    workflows: ["CI"]
-    branches: [main]
-    types: [completed]
+      release_tag:
+        description: Existing v* tag to rebuild and publish
+        required: true
+        type: string
 
 permissions:
   contents: read
-  packages: write
+
+defaults:
+  run:
+    shell: bash
 
 concurrency:
-  group: docker-${{ inputs.release == true && github.sha || github.event.workflow_run.head_sha }}
+  group: docker-${{ inputs.release_tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
   source:
-    if: inputs.release == true || github.event.workflow_run.conclusion == 'success'
+    name: Verify release source
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     env:
-      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-      SOURCE_REF: ${{ inputs.release == true && github.sha || github.event.workflow_run.head_sha }}
-      RELEASE: ${{ inputs.release == true }}
+      RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+      RELEASE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.release_tag) || github.ref }}
     outputs:
+      build_time: ${{ steps.source.outputs.build_time }}
+      release_tag: ${{ steps.source.outputs.release_tag }}
       sha: ${{ steps.source.outputs.sha }}
       short_sha: ${{ steps.source.outputs.short_sha }}
-      version: ${{ steps.source.outputs.version }}
     steps:
-      - uses: actions/checkout@v7
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          ref: ${{ env.SOURCE_REF }}
+          ref: ${{ env.RELEASE_REF }}
+
       - name: Require Docker Hub credentials
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
           set -euo pipefail
           if [[ -z "$DOCKERHUB_USERNAME" || -z "$DOCKERHUB_TOKEN" ]]; then
-            echo "::error::DOCKERHUB_USERNAME and DOCKERHUB_TOKEN are required for Docker publishing"
+            echo "::error::DOCKERHUB_USERNAME and DOCKERHUB_TOKEN are required for release publishing"
             exit 1
           fi
-      - name: Verify image source
+
+      - name: Verify release source
         id: source
         run: |
           set -euo pipefail
-          source_sha="$(git rev-parse HEAD)"
           package_version="$(sed -n '/^\[package\]/,/^\[/ s/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)"
           test -n "$package_version"
-          if [[ "$RELEASE" == "true" ]]; then
-            test "$GITHUB_REF_NAME" = "v${package_version}"
-          fi
+          test "$RELEASE_TAG" = "v${package_version}"
+          git show-ref --verify --quiet "$RELEASE_REF"
+          source_sha="$(git rev-parse HEAD)"
+          test "$(git rev-parse "${RELEASE_REF}^{commit}")" = "$source_sha"
+          printf 'build_time=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_OUTPUT"
+          printf 'release_tag=%s\n' "$RELEASE_TAG" >> "$GITHUB_OUTPUT"
           printf 'sha=%s\n' "$source_sha" >> "$GITHUB_OUTPUT"
           printf 'short_sha=%s\n' "${source_sha:0:7}" >> "$GITHUB_OUTPUT"
-          printf 'version=%s\n' "$package_version" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build ${{ matrix.platform }} image
@@ -83,55 +91,90 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      RELEASE_TAG: ${{ needs.source.outputs.release_tag }}
       SOURCE_SHA: ${{ needs.source.outputs.sha }}
       BUILD_ID: ${{ github.run_id }}-${{ github.run_attempt }}
     steps:
-      - uses: actions/checkout@v7
+      - name: Check out verified source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ needs.source.outputs.sha }}
-      - uses: docker/setup-buildx-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+
       - name: Log in to GHCR
-        uses: docker/login-action@v4
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4.5.1
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Log in to Docker Hub
-        uses: docker/login-action@v4
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4.5.1
         with:
           username: ${{ env.DOCKERHUB_USERNAME }}
           password: ${{ env.DOCKERHUB_TOKEN }}
-      - name: Select temporary image tags
+
+      - name: Select public image names
         id: images
         env:
           PLATFORM_TAG: ${{ matrix.platform_tag }}
         run: |
           set -euo pipefail
+          images=("ghcr.io/${GITHUB_REPOSITORY,,}" "docker.io/czyt/lightbws")
           {
-            printf 'tags<<EOF\n'
-            printf 'ghcr.io/%s:build-%s-%s-%s\n' "${GITHUB_REPOSITORY,,}" "$SOURCE_SHA" "$BUILD_ID" "$PLATFORM_TAG"
-            printf 'docker.io/czyt/lightbws:build-%s-%s-%s\n' "$SOURCE_SHA" "$BUILD_ID" "$PLATFORM_TAG"
+            printf 'images<<EOF\n'
+            printf '%s\n' "${images[@]}"
+            printf 'EOF\n'
+            printf 'temporary_tags<<EOF\n'
+            for image in "${images[@]}"; do
+              printf '%s:build-%s-%s-%s\n' \
+                "$image" "$SOURCE_SHA" "$BUILD_ID" "$PLATFORM_TAG"
+            done
             printf 'EOF\n'
           } >> "$GITHUB_OUTPUT"
-      - uses: docker/build-push-action@v7
+
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@c1e51972afc2121e065aed6d45c65596fe445f3f # v5.8.0
+        with:
+          images: ${{ steps.images.outputs.images }}
+          flavor: latest=false
+          tags: |
+            type=ref,event=tag
+            type=raw,value=${{ env.RELEASE_TAG }},enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=semver,pattern={{version}},value=${{ env.RELEASE_TAG }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.RELEASE_TAG }},enable=${{ github.event_name == 'push' }}
+            type=raw,value=latest,enable=${{ github.event_name == 'push' }}
+            type=sha,prefix=sha-,enable=${{ github.event_name == 'push' }}
+            type=raw,value=sha-${{ needs.source.outputs.short_sha }},enable=${{ github.event_name == 'workflow_dispatch' }}
+
+      - name: Build and push native image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           file: ./Dockerfile
           platforms: ${{ matrix.platform }}
           push: true
-          tags: ${{ steps.images.outputs.tags }}
+          tags: ${{ steps.images.outputs.temporary_tags }}
           labels: |
+            ${{ steps.meta.outputs.labels }}
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.version=${{ needs.source.outputs.version }}
-            org.opencontainers.image.revision=${{ needs.source.outputs.sha }}
+            org.opencontainers.image.version=${{ env.RELEASE_TAG }}
+            org.opencontainers.image.revision=${{ env.SOURCE_SHA }}
+          build-args: |
+            VERSION=${{ env.RELEASE_TAG }}
+            BUILD_TIME=${{ needs.source.outputs.build_time }}
+            GIT_COMMIT=${{ env.SOURCE_SHA }}
           cache-from: type=gha,scope=lightbws-${{ matrix.cache_scope }}
           cache-to: type=gha,mode=max,scope=lightbws-${{ matrix.cache_scope }}
           provenance: true
           sbom: true
 
   merge:
-    name: Publish multi-platform images
+    name: Publish multi-platform image
     needs: [source, build]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -141,43 +184,58 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      RELEASE_TAG: ${{ needs.source.outputs.release_tag }}
       SOURCE_SHA: ${{ needs.source.outputs.sha }}
       BUILD_ID: ${{ github.run_id }}-${{ github.run_attempt }}
-      VERSION: ${{ needs.source.outputs.version }}
-      RELEASE: ${{ inputs.release == true }}
     steps:
-      - uses: docker/setup-buildx-action@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+
       - name: Log in to GHCR
-        uses: docker/login-action@v4
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4.5.1
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Log in to Docker Hub
-        uses: docker/login-action@v4
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4.5.1
         with:
           username: ${{ env.DOCKERHUB_USERNAME }}
           password: ${{ env.DOCKERHUB_TOKEN }}
+
+      - name: Select public image names
+        id: images
+        run: |
+          set -euo pipefail
+          printf 'images<<EOF\n' >> "$GITHUB_OUTPUT"
+          printf 'ghcr.io/%s\n' "${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+          printf 'docker.io/czyt/lightbws\n' >> "$GITHUB_OUTPUT"
+          printf 'EOF\n' >> "$GITHUB_OUTPUT"
+
       - name: Extract image metadata
         id: meta
-        uses: docker/metadata-action@v6
+        uses: docker/metadata-action@c1e51972afc2121e065aed6d45c65596fe445f3f # v5.8.0
         with:
-          images: |
-            ghcr.io/${{ github.repository }}
-            docker.io/czyt/lightbws
+          images: ${{ steps.images.outputs.images }}
           flavor: latest=false
           tags: |
-            type=semver,pattern={{version}},value=${{ github.ref_name }},enable=${{ inputs.release == true }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ github.ref_name }},enable=${{ inputs.release == true }}
-            type=raw,value=latest,enable=${{ inputs.release == true }}
-            type=raw,value=latest,enable=${{ inputs.release != true }}
-            type=raw,value=sha-${{ needs.source.outputs.short_sha }},enable=${{ inputs.release != true }}
+            type=ref,event=tag
+            type=raw,value=${{ env.RELEASE_TAG }},enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=semver,pattern={{version}},value=${{ env.RELEASE_TAG }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.RELEASE_TAG }},enable=${{ github.event_name == 'push' }}
+            type=raw,value=latest,enable=${{ github.event_name == 'push' }}
+            type=sha,prefix=sha-,enable=${{ github.event_name == 'push' }}
+            type=raw,value=sha-${{ needs.source.outputs.short_sha }},enable=${{ github.event_name == 'workflow_dispatch' }}
+
       - name: Create and verify multi-platform manifests
         env:
           DOCKER_METADATA_OUTPUT_JSON: ${{ steps.meta.outputs.json }}
+          IMAGES: ${{ steps.images.outputs.images }}
         run: |
           set -euo pipefail
-          for image in "ghcr.io/${GITHUB_REPOSITORY,,}" "docker.io/czyt/lightbws"; do
+          while IFS= read -r image; do
+            [[ -n "$image" ]] || continue
             mapfile -t final_tags < <(
               jq -r --arg image "$image" \
                 '.tags[] | select(startswith($image + ":"))' \
@@ -191,26 +249,18 @@ jobs:
             docker buildx imagetools create "${tag_args[@]}" \
               "${image}:build-${SOURCE_SHA}-${BUILD_ID}-amd64" \
               "${image}:build-${SOURCE_SHA}-${BUILD_ID}-arm64"
-            if [[ "$RELEASE" == "true" ]]; then
-              verify_tag="${image}:${VERSION}"
-            else
-              verify_tag="${image}:latest"
-            fi
-            docker buildx imagetools inspect --raw "$verify_tag" \
+            docker buildx imagetools inspect --raw "${image}:${RELEASE_TAG#v}" \
               | jq -e '
                   [.manifests[]?.platform
                     | select(.os == "linux")
                     | .architecture] as $architectures
+                  | [.manifests[]?
+                      | select(
+                          .annotations["vnd.docker.reference.type"]
+                            == "attestation-manifest"
+                        )] as $attestations
                   | ($architectures | index("amd64")) != null
                     and ($architectures | index("arm64")) != null
+                    and ($attestations | length) >= 2
                 ' >/dev/null
-          done
-      - name: Make the GHCR package public
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          package_name="${GITHUB_REPOSITORY#*/}"
-          gh api --method PATCH \
-            "/orgs/${GITHUB_REPOSITORY_OWNER}/packages/container/${package_name}" \
-            -f visibility=public >/dev/null
+          done <<< "$IMAGES"

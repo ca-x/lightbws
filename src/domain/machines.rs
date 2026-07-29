@@ -30,6 +30,7 @@ pub struct MachineAccount {
     pub client_id: Uuid,
     pub last_used_at: Option<i64>,
     pub revoked_at: Option<i64>,
+    pub compatibility_account: bool,
     pub created_at: i64,
 }
 
@@ -68,6 +69,7 @@ impl MachineRepository {
             created_by: Set(creator.to_string()),
             last_used_at: Set(None),
             revoked_at: Set(None),
+            compatibility_account: Set(true),
             created_at: Set(now()),
         }
         .insert(self.db.connection())
@@ -97,6 +99,7 @@ impl MachineRepository {
             created_by: Set(creator.to_string()),
             last_used_at: Set(None),
             revoked_at: Set(None),
+            compatibility_account: Set(false),
             created_at: Set(now()),
         }
         .insert(self.db.connection())
@@ -221,6 +224,7 @@ impl TryFrom<machine_account::Model> for MachineAccount {
             client_id: Uuid::parse_str(&value.client_id).map_err(AppError::internal)?,
             last_used_at: value.last_used_at,
             revoked_at: value.revoked_at,
+            compatibility_account: value.compatibility_account,
             created_at: value.created_at,
         })
     }

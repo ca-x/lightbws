@@ -9,8 +9,10 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    auth::{AuthenticatedSession, MutationSession},
+    auth::{AuthenticatedSession, MutationSession, require_admin},
     domain::{
+        access::AccessRepository,
+        audit::{AuditActor, AuditRepository},
         projects::{ProjectRepository, WebProject},
         secrets::{SecretRepository, WebSecret},
     },
@@ -37,7 +39,7 @@ struct SecretInput {
     value: String,
     #[serde(default)]
     note: String,
-    project_id: Option<Uuid>,
+    project_id: Uuid,
 }
 
 #[derive(Serialize)]
@@ -72,20 +74,36 @@ pub fn routes() -> Router<AppState> {
 
 async fn overview(
     State(state): State<AppState>,
-    _session: AuthenticatedSession,
+    session: AuthenticatedSession,
 ) -> Result<Json<Overview>, AppError> {
-    let projects = ProjectRepository::new(state.db.clone())
-        .list(false)
-        .await?
-        .len();
+    let access = AccessRepository::new(state.db.clone());
+    let mut projects = 0;
+    for project in ProjectRepository::new(state.db.clone()).list(false).await? {
+        let id = Uuid::parse_str(&project.id).map_err(AppError::internal)?;
+        if access
+            .user_project(session.user_id, session.user.role, id)
+            .await?
+            .read
+        {
+            projects += 1;
+        }
+    }
     let secrets_repository = SecretRepository::new(state.db);
-    let secrets = secrets_repository.list(false, None).await?.len();
-    let trash = secrets_repository
-        .list(true, None)
-        .await?
-        .into_iter()
-        .filter(|secret| secret.deleted_at.is_some())
-        .count();
+    let mut secrets = 0;
+    let mut trash = 0;
+    for secret in secrets_repository.list(true, None).await? {
+        if access
+            .user_secret(session.user_id, session.user.role, &secret)
+            .await?
+            .read
+        {
+            if secret.deleted_at.is_some() {
+                trash += 1;
+            } else {
+                secrets += 1;
+            }
+        }
+    }
     Ok(Json(Overview {
         projects,
         secrets,
@@ -95,160 +113,264 @@ async fn overview(
 
 async fn list_projects(
     State(state): State<AppState>,
-    _session: AuthenticatedSession,
+    session: AuthenticatedSession,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Vec<WebProject>>, AppError> {
-    let projects = ProjectRepository::new(state.db)
-        .list(query.trash)
-        .await?
-        .into_iter()
-        .filter(|project| query.trash || project.deleted_at.is_none())
-        .filter(|project| !query.trash || project.deleted_at.is_some())
-        .map(WebProject::try_from)
-        .collect::<Result<Vec<_>, _>>()?;
+    let access = AccessRepository::new(state.db.clone());
+    let mut projects = Vec::new();
+    for project in ProjectRepository::new(state.db).list(query.trash).await? {
+        if (!query.trash && project.deleted_at.is_some())
+            || (query.trash && project.deleted_at.is_none())
+        {
+            continue;
+        }
+        let id = Uuid::parse_str(&project.id).map_err(AppError::internal)?;
+        let permissions = access
+            .user_project(session.user_id, session.user.role, id)
+            .await?;
+        if permissions.read {
+            let mut view = WebProject::try_from(project)?;
+            view.permissions = permissions;
+            projects.push(view);
+        }
+    }
     Ok(Json(projects))
 }
 
 async fn create_project(
     State(state): State<AppState>,
-    _mutation: MutationSession,
+    mutation: MutationSession,
     Json(input): Json<ProjectInput>,
 ) -> Result<(StatusCode, Json<WebProject>), AppError> {
-    Ok((
-        StatusCode::CREATED,
-        Json(
-            ProjectRepository::new(state.db)
-                .create_plain(&input.name)
-                .await?,
-        ),
-    ))
+    require_admin(&mutation.0.user)?;
+    let project = ProjectRepository::new(state.db.clone())
+        .create_plain(&input.name)
+        .await?;
+    record_user_event(
+        &state,
+        mutation.0.user_id,
+        "project.create",
+        "project",
+        project.id,
+    )
+    .await?;
+    Ok((StatusCode::CREATED, Json(project)))
 }
 
 async fn update_project(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-    _mutation: MutationSession,
+    mutation: MutationSession,
     Json(input): Json<ProjectInput>,
 ) -> Result<Json<WebProject>, AppError> {
-    Ok(Json(
-        ProjectRepository::new(state.db)
-            .update_plain(id, &input.name)
-            .await?,
-    ))
+    require_admin(&mutation.0.user)?;
+    let project = ProjectRepository::new(state.db.clone())
+        .update_plain(id, &input.name)
+        .await?;
+    record_user_event(&state, mutation.0.user_id, "project.update", "project", id).await?;
+    Ok(Json(project))
 }
 
 async fn trash_project(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-    _mutation: MutationSession,
+    mutation: MutationSession,
 ) -> Result<StatusCode, AppError> {
-    ProjectRepository::new(state.db)
+    require_admin(&mutation.0.user)?;
+    ProjectRepository::new(state.db.clone())
         .set_deleted(&[id], true)
         .await?;
+    record_user_event(&state, mutation.0.user_id, "project.trash", "project", id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 async fn restore_project(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-    _mutation: MutationSession,
+    mutation: MutationSession,
 ) -> Result<StatusCode, AppError> {
-    ProjectRepository::new(state.db)
+    require_admin(&mutation.0.user)?;
+    ProjectRepository::new(state.db.clone())
         .set_deleted(&[id], false)
         .await?;
+    record_user_event(&state, mutation.0.user_id, "project.restore", "project", id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 async fn purge_project(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-    _mutation: MutationSession,
+    mutation: MutationSession,
 ) -> Result<StatusCode, AppError> {
-    ProjectRepository::new(state.db).purge(id).await?;
+    require_admin(&mutation.0.user)?;
+    ProjectRepository::new(state.db.clone()).purge(id).await?;
+    record_user_event(&state, mutation.0.user_id, "project.purge", "project", id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 async fn list_secrets(
     State(state): State<AppState>,
-    _session: AuthenticatedSession,
+    session: AuthenticatedSession,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Vec<WebSecret>>, AppError> {
-    let secrets = SecretRepository::new(state.db)
+    let access = AccessRepository::new(state.db.clone());
+    let mut secrets = Vec::new();
+    for secret in SecretRepository::new(state.db)
         .list(query.trash, query.project_id)
         .await?
-        .into_iter()
-        .filter(|secret| query.trash || secret.deleted_at.is_none())
-        .filter(|secret| !query.trash || secret.deleted_at.is_some())
-        .map(WebSecret::try_from)
-        .collect::<Result<Vec<_>, _>>()?;
+    {
+        if (!query.trash && secret.deleted_at.is_some())
+            || (query.trash && secret.deleted_at.is_none())
+        {
+            continue;
+        }
+        let permissions = access
+            .user_secret(session.user_id, session.user.role, &secret)
+            .await?;
+        if permissions.read {
+            let mut view = WebSecret::try_from(secret)?;
+            view.permissions = permissions;
+            secrets.push(view);
+        }
+    }
     Ok(Json(secrets))
 }
 
 async fn get_secret(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-    _session: AuthenticatedSession,
+    session: AuthenticatedSession,
 ) -> Result<Json<WebSecret>, AppError> {
-    Ok(Json(WebSecret::try_from(
-        SecretRepository::new(state.db).get(id).await?,
-    )?))
+    let model = SecretRepository::new(state.db.clone()).get(id).await?;
+    let permissions = AccessRepository::new(state.db.clone())
+        .user_secret(session.user_id, session.user.role, &model)
+        .await?;
+    permissions.require_read()?;
+    let mut view = WebSecret::try_from(model)?;
+    view.permissions = permissions;
+    record_user_event(&state, session.user_id, "secret.read", "secret", id).await?;
+    Ok(Json(view))
 }
 
 async fn create_secret(
     State(state): State<AppState>,
-    _mutation: MutationSession,
+    mutation: MutationSession,
     Json(input): Json<SecretInput>,
 ) -> Result<(StatusCode, Json<WebSecret>), AppError> {
-    Ok((
-        StatusCode::CREATED,
-        Json(
-            SecretRepository::new(state.db)
-                .create_plain(&input.key, &input.value, &input.note, input.project_id)
-                .await?,
-        ),
-    ))
+    let permissions = AccessRepository::new(state.db.clone())
+        .user_project(mutation.0.user_id, mutation.0.user.role, input.project_id)
+        .await?;
+    permissions.require_write()?;
+    let mut secret = SecretRepository::new(state.db.clone())
+        .create_plain(&input.key, &input.value, &input.note, input.project_id)
+        .await?;
+    secret.permissions = permissions;
+    record_user_event(
+        &state,
+        mutation.0.user_id,
+        "secret.create",
+        "secret",
+        secret.id,
+    )
+    .await?;
+    Ok((StatusCode::CREATED, Json(secret)))
 }
 
 async fn update_secret(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-    _mutation: MutationSession,
+    mutation: MutationSession,
     Json(input): Json<SecretInput>,
 ) -> Result<Json<WebSecret>, AppError> {
-    Ok(Json(
-        SecretRepository::new(state.db)
-            .update_plain(id, &input.key, &input.value, &input.note, input.project_id)
-            .await?,
-    ))
+    let repository = SecretRepository::new(state.db.clone());
+    let existing = repository.get(id).await?;
+    let access = AccessRepository::new(state.db.clone());
+    access
+        .user_secret(mutation.0.user_id, mutation.0.user.role, &existing)
+        .await?
+        .require_write()?;
+    let target = if existing.project_id == input.project_id.to_string() {
+        access
+            .user_secret(mutation.0.user_id, mutation.0.user.role, &existing)
+            .await?
+    } else {
+        let target = access
+            .user_project(mutation.0.user_id, mutation.0.user.role, input.project_id)
+            .await?;
+        target.require_write()?;
+        target
+    };
+    let mut secret = repository
+        .update_plain(id, &input.key, &input.value, &input.note, input.project_id)
+        .await?;
+    secret.permissions = target;
+    record_user_event(&state, mutation.0.user_id, "secret.update", "secret", id).await?;
+    Ok(Json(secret))
 }
 
 async fn trash_secret(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-    _mutation: MutationSession,
+    mutation: MutationSession,
 ) -> Result<StatusCode, AppError> {
-    SecretRepository::new(state.db)
+    require_secret_write(&state, &mutation, id).await?;
+    SecretRepository::new(state.db.clone())
         .set_deleted(&[id], true)
         .await?;
+    record_user_event(&state, mutation.0.user_id, "secret.trash", "secret", id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 async fn restore_secret(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-    _mutation: MutationSession,
+    mutation: MutationSession,
 ) -> Result<StatusCode, AppError> {
-    SecretRepository::new(state.db)
+    require_secret_write(&state, &mutation, id).await?;
+    SecretRepository::new(state.db.clone())
         .set_deleted(&[id], false)
         .await?;
+    record_user_event(&state, mutation.0.user_id, "secret.restore", "secret", id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 async fn purge_secret(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-    _mutation: MutationSession,
+    mutation: MutationSession,
 ) -> Result<StatusCode, AppError> {
-    SecretRepository::new(state.db).purge(id).await?;
+    require_secret_write(&state, &mutation, id).await?;
+    SecretRepository::new(state.db.clone()).purge(id).await?;
+    record_user_event(&state, mutation.0.user_id, "secret.purge", "secret", id).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn require_secret_write(
+    state: &AppState,
+    mutation: &MutationSession,
+    id: Uuid,
+) -> Result<(), AppError> {
+    let model = SecretRepository::new(state.db.clone()).get(id).await?;
+    AccessRepository::new(state.db.clone())
+        .user_secret(mutation.0.user_id, mutation.0.user.role, &model)
+        .await?
+        .require_write()
+}
+
+async fn record_user_event(
+    state: &AppState,
+    user_id: Uuid,
+    action: &str,
+    resource_kind: &str,
+    resource_id: Uuid,
+) -> Result<(), AppError> {
+    AuditRepository::new(state.db.clone())
+        .record(
+            AuditActor::User(user_id),
+            action,
+            resource_kind,
+            Some(resource_id),
+            "allowed",
+        )
+        .await
 }

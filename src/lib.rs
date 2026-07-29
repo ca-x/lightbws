@@ -61,6 +61,7 @@ pub fn create_app(state: AppState) -> Router {
     Router::new()
         .nest("/api/v1", api::routes())
         .merge(api::sdk::routes())
+        .merge(api::access::sdk_routes())
         .route("/health", get(api::sdk::health))
         .route("/help", get(api::sdk::help))
         .fallback(web::serve)

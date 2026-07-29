@@ -6,8 +6,11 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::{
-    db::{Database, entities::secret},
-    domain::{ORGANIZATION_ID, next_sdk_revision, now},
+    db::{
+        Database,
+        entities::{project, secret},
+    },
+    domain::{access::Permission, next_sdk_revision, now},
     error::AppError,
 };
 
@@ -15,7 +18,7 @@ use crate::{
 #[serde(rename_all = "camelCase")]
 pub struct WebSecret {
     pub id: Uuid,
-    pub project_id: Option<Uuid>,
+    pub project_id: Uuid,
     pub key: String,
     pub value: Option<String>,
     pub note: String,
@@ -23,6 +26,7 @@ pub struct WebSecret {
     pub deleted_at: Option<i64>,
     pub created_at: i64,
     pub updated_at: i64,
+    pub permissions: Permission,
 }
 
 #[derive(Clone)]
@@ -40,9 +44,7 @@ impl SecretRepository {
         include_deleted: bool,
         project_id: Option<Uuid>,
     ) -> Result<Vec<secret::Model>, AppError> {
-        let mut query = secret::Entity::find()
-            .filter(secret::Column::OrganizationId.eq(ORGANIZATION_ID))
-            .order_by_desc(secret::Column::UpdatedAt);
+        let mut query = secret::Entity::find().order_by_desc(secret::Column::UpdatedAt);
         if !include_deleted {
             query = query.filter(secret::Column::DeletedAt.is_null());
         }
@@ -72,16 +74,16 @@ impl SecretRepository {
         key: &str,
         value: &str,
         note: &str,
-        project_id: Option<Uuid>,
+        project_id: Uuid,
     ) -> Result<WebSecret, AppError> {
         validate_plain(key, value, note)?;
         let timestamp = now();
         let transaction = self.db.connection().begin().await?;
+        require_active_project(&transaction, project_id).await?;
         let revision_nanos = next_sdk_revision(&transaction).await?;
         let model = secret::ActiveModel {
             id: Set(Uuid::new_v4().to_string()),
-            organization_id: Set(ORGANIZATION_ID.into()),
-            project_id: Set(project_id.map(|id| id.to_string())),
+            project_id: Set(project_id.to_string()),
             key_cipher: Set(None),
             value_cipher: Set(None),
             note_cipher: Set(None),
@@ -104,16 +106,16 @@ impl SecretRepository {
         key: String,
         value: String,
         note: String,
-        project_id: Option<Uuid>,
+        project_id: Uuid,
     ) -> Result<secret::Model, AppError> {
         validate_cipher(&key, &value, &note)?;
         let timestamp = now();
         let transaction = self.db.connection().begin().await?;
+        require_active_project(&transaction, project_id).await?;
         let revision_nanos = next_sdk_revision(&transaction).await?;
         let model = secret::ActiveModel {
             id: Set(Uuid::new_v4().to_string()),
-            organization_id: Set(ORGANIZATION_ID.into()),
-            project_id: Set(project_id.map(|id| id.to_string())),
+            project_id: Set(project_id.to_string()),
             key_cipher: Set(Some(key)),
             value_cipher: Set(Some(value)),
             note_cipher: Set(Some(note)),
@@ -137,10 +139,11 @@ impl SecretRepository {
         key: &str,
         value: &str,
         note: &str,
-        project_id: Option<Uuid>,
+        project_id: Uuid,
     ) -> Result<WebSecret, AppError> {
         validate_plain(key, value, note)?;
         let transaction = self.db.connection().begin().await?;
+        require_active_project(&transaction, project_id).await?;
         let model = secret::Entity::find_by_id(id.to_string())
             .one(&transaction)
             .await?
@@ -153,7 +156,7 @@ impl SecretRepository {
         active.key_plain = Set(Some(key.trim().into()));
         active.value_plain = Set(Some(value.into()));
         active.note_plain = Set(Some(note.into()));
-        active.project_id = Set(project_id.map(|id| id.to_string()));
+        active.project_id = Set(project_id.to_string());
         active.updated_at = Set(now());
         active.revision_nanos = Set(revision_nanos);
         let model = active.update(&transaction).await?;
@@ -167,10 +170,11 @@ impl SecretRepository {
         key: String,
         value: String,
         note: String,
-        project_id: Option<Uuid>,
+        project_id: Uuid,
     ) -> Result<secret::Model, AppError> {
         validate_cipher(&key, &value, &note)?;
         let transaction = self.db.connection().begin().await?;
+        require_active_project(&transaction, project_id).await?;
         let model = secret::Entity::find_by_id(id.to_string())
             .one(&transaction)
             .await?
@@ -183,7 +187,7 @@ impl SecretRepository {
         active.key_plain = Set(None);
         active.value_plain = Set(None);
         active.note_plain = Set(None);
-        active.project_id = Set(project_id.map(|id| id.to_string()));
+        active.project_id = Set(project_id.to_string());
         active.updated_at = Set(now());
         active.revision_nanos = Set(revision_nanos);
         let model = active.update(&transaction).await?;
@@ -242,10 +246,7 @@ impl TryFrom<secret::Model> for WebSecret {
         let sdk_encrypted = value.key_cipher.is_some();
         Ok(Self {
             id: Uuid::parse_str(&value.id).map_err(AppError::internal)?,
-            project_id: value
-                .project_id
-                .map(|id| Uuid::parse_str(&id).map_err(AppError::internal))
-                .transpose()?,
+            project_id: Uuid::parse_str(&value.project_id).map_err(AppError::internal)?,
             key: value
                 .key_plain
                 .unwrap_or_else(|| "Encrypted SDK secret".into()),
@@ -255,8 +256,21 @@ impl TryFrom<secret::Model> for WebSecret {
             deleted_at: value.deleted_at,
             created_at: value.created_at,
             updated_at: value.updated_at,
+            permissions: Permission::FULL,
         })
     }
+}
+
+async fn require_active_project(
+    connection: &impl sea_orm::ConnectionTrait,
+    project_id: Uuid,
+) -> Result<(), AppError> {
+    project::Entity::find_by_id(project_id.to_string())
+        .filter(project::Column::DeletedAt.is_null())
+        .one(connection)
+        .await?
+        .map(|_| ())
+        .ok_or_else(|| AppError::Validation("secret project does not exist or is deleted".into()))
 }
 
 fn validate_plain(key: &str, value: &str, note: &str) -> Result<(), AppError> {

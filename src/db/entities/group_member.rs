@@ -1,16 +1,12 @@
 use sea_orm::entity::prelude::*;
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
-#[sea_orm(table_name = "audit_events")]
+#[sea_orm(table_name = "group_members")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
-    pub id: String,
-    pub actor_kind: String,
-    pub actor_id: Option<String>,
-    pub action: String,
-    pub resource_kind: String,
-    pub resource_id: Option<String>,
-    pub outcome: String,
+    pub group_id: String,
+    #[sea_orm(primary_key, auto_increment = false)]
+    pub user_id: String,
     pub created_at: i64,
 }
 

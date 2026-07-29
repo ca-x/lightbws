@@ -26,12 +26,7 @@ async fn portable_export_round_trips_projects_and_secrets() {
         .await
         .expect("project");
     SecretRepository::new(source.clone())
-        .create_plain(
-            "DATABASE_URL",
-            "sqlite://production",
-            "runtime",
-            Some(project.id),
-        )
+        .create_plain("DATABASE_URL", "sqlite://production", "runtime", project.id)
         .await
         .expect("secret");
 

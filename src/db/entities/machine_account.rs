@@ -13,6 +13,7 @@ pub struct Model {
     pub created_by: String,
     pub last_used_at: Option<i64>,
     pub revoked_at: Option<i64>,
+    pub compatibility_account: bool,
     pub created_at: i64,
 }
 

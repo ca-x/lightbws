@@ -10,11 +10,15 @@ LightBWS 是一个可持久化、自托管的 Bitwarden Secrets Manager server�
 
 ![LightBWS 控制台](screenshoot/dashboard-zh.png)
 
+![LightBWS 审计日志保留策略](screenshoot/audit-zh.png)
+
 ## 功能
 
 - 使用 SQLite 持久化数据，启用 WAL、外键和并发访问保护。
-- 支持通过环境变量初始化管理员，并在 Web 界面管理用户。
-- 支持项目、密钥、机器账号、软删除回收站和一次性访问令牌展示。
+- 支持通过环境变量初始化管理员，并在 Web 界面管理用户和用户组。
+- 支持为用户、用户组和机器账户配置项目权限与密钥直接权限，权限分为只读和读写。
+- 支持项目、密钥、机器账户、软删除回收站和一次性访问令牌展示。
+- 审计日志支持关闭记录、按保留天数自动清理和手动清空。
 - 使用 Cookie 会话、CSRF 防护、Argon2id 密码、加密备份凭据和安全响应头。
 - Web 界面支持中文和英文，提供 7 个 Astryx 内置主题，以及跟随系统、浅色和深色模式。
 - 支持使用口令加密的可移植导入导出。
@@ -57,7 +61,7 @@ docker compose pull
 docker compose up -d
 ```
 
-如果部署需要固定版本，可在 `.env` 中设置 `LIGHTBWS_IMAGE=ghcr.io/ca-x/lightbws:0.1.0`。执行 `docker compose down` 会保留数据卷，执行 `docker compose down -v` 会永久删除数据卷。
+如果部署需要固定版本，可在 `.env` 中设置 `LIGHTBWS_IMAGE=ghcr.io/ca-x/lightbws:0.1.1`。执行 `docker compose down` 会保留数据卷，执行 `docker compose down -v` 会永久删除数据卷。
 
 ### 发布二进制
 
@@ -99,6 +103,28 @@ export LIGHTBWS_ADMIN_PASSWORD='replace-with-a-long-password'
 
 如果未设置 `LIGHTBWS_MASTER_KEY`，LightBWS 会在数据目录创建仅所有者可读的 `master.key`。请将它与 SQLite 数据库一起持久化，否则无法恢复远程备份文件。
 
+## 权限模型
+
+LightBWS 按照 Bitwarden Secrets Manager 的模型实现权限系统。系统只有一个组织边界，不存在个人密钥空间，每个密钥必须且只能属于一个项目。
+
+| 实体 | 用途 | 权限方式 |
+| --- | --- | --- |
+| 项目 | 对相关密钥进行分组，也是主要权限边界。 | 用户、用户组和机器账户可以获得只读或读写权限。 |
+| 机器账户 | 代表 CI/CD、应用和其他非人工客户端。 | 使用一次性访问令牌认证，每个项目可以配置不同权限。 |
+| 密钥 | 保存项目中的一个敏感键值对。 | 可以直接为用户、用户组或机器账户增加只读或读写权限，并与项目权限叠加。 |
+
+管理员负责管理用户、用户组、机器账户、项目和授权。普通成员只能看到自己可读取的项目与密钥。读写权限决定用户能否创建、编辑、移动或删除密钥。系统会在每次请求时计算用户组继承关系，因此修改权限后无需重启服务或客户端。
+
+## 审计日志
+
+管理员可以在 Web 界面配置审计日志的生命周期：
+
+- 关闭记录时停止写入新事件，已有历史不会被删除。
+- 开启自动清理后，每小时检查一次，可设置 1 至 3650 天的保留期。
+- 确认后可手动清空全部审计事件。
+
+审计事件只保存操作者、操作、资源标识、结果和时间，不会记录密钥值。数据库禁止普通代码修改或删除审计事件，清理操作只能在受控事务中临时打开删除闸门。
+
 ## SDK 和 BWS
 
 LightBWS 实现官方 SDK 使用的 Secrets Manager 路由，并持久化客户端发送的密文。请在 Web 界面创建机器账号，复制一次性凭据，然后将客户端指向 LightBWS 基础地址。凭据交换会签发随机的一小时 Bearer 令牌，并将摘要写入 SQLite。每次 SDK 请求都会检查令牌是否过期，以及机器账号是否仍处于有效状态。
@@ -107,8 +133,10 @@ LightBWS 实现官方 SDK 使用的 Secrets Manager 路由，并持久化客户�
 
 ```bash
 export BWS_ACCESS_TOKEN='0.<client-id>.<client-secret>:X8vbvA0bduihIDe/qrzIQQ=='
-bws --server-url http://127.0.0.1:8080 project list
+bws --server-url https://lightbws.example.com project list
 ```
+
+官方 SDK 和 `bws` 的发布构建强制使用 HTTPS。部署时请通过 HTTPS 反向代理访问 LightBWS。仓库中的调试版 SDK 演示可在本地开发时使用 HTTP。
 
 仓库在 `demo/sdk-demo` 提供官方 Rust SDK 往返演示：
 
@@ -118,7 +146,7 @@ BWS_ACCESS_TOKEN="$BWS_ACCESS_TOKEN" \
 cargo run --manifest-path demo/sdk-demo/Cargo.toml
 ```
 
-演示会完成认证，创建项目和密钥，读取并列出它们，然后删除测试数据。
+演示会完成认证，创建项目和密钥，读取并列出它们，然后删除测试数据。运行前需要先为机器账户授予至少一个项目的读写权限。
 
 SDK 创建的数据会以 Bitwarden 密文保存在 SQLite 中，并由 SDK 客户端解密。Web 创建的数据属于经过认证的 Web 信任边界，不会伪装成 SDK 密文响应。界面会明确标记 SDK 数据。
 
@@ -140,6 +168,14 @@ export BWS_SERVER_URL='https://lightbws.example.com'
 fnox get DATABASE_URL
 fnox exec -- npm start
 ```
+
+授权验收始终使用同一份 `fnox.toml`：
+
+1. 项目权限为读写或只读时，`fnox get DATABASE_URL` 都能读取密钥。
+2. 移除项目授权后，下一次执行立即返回 `secret_not_found`。
+3. 恢复只读权限后，同一条命令无需修改配置即可重新成功。
+4. 吊销机器账户会同时使已有 SDK 会话失效，下一次执行立即返回 HTTP 401。
+5. 重新启用机器账户后，不需要修改项目权限或访问令牌即可恢复访问。
 
 ## 备份和迁移
 
@@ -201,15 +237,15 @@ cargo audit
 npm --prefix web audit
 ```
 
-运行时验收还会覆盖官方 Rust SDK 的创建、读取、列表和删除往返流程，`bws` 与 Fnox 按项目读取密钥，使用 `agent-browser` 检查管理员和用户管理流程、浏览器控制台，以及 Axe 无障碍扫描。
+运行时验收还会覆盖官方 Rust SDK 的创建、读取、列表和删除往返流程，`bws` 与 Fnox 通过 HTTPS 按项目读取密钥，使用 `agent-browser` 检查管理员与普通成员权限、审计清理、浏览器控制台，以及全部 Astryx 主题下的 Axe 无障碍扫描。
 
 ## 发布
 
-`main` 通过 CI 后，Docker 工作流会发布 `latest` 和提交 SHA 镜像标签。推送 `vX.Y.Z` 语义化标签后，工作流会先校验所有包版本并重新运行完整测试。只有所有二进制和多架构镜像构建成功后，最后一个任务才会创建 GitHub Release：
+`main` 通过 CI 后，推送 `vX.Y.Z` 语义化标签会启动两个发布工作流。Release 工作流会校验所有包版本、重新运行完整测试套件、构建各平台归档并创建 GitHub Release；Docker 工作流则并行构建两个架构的镜像，全部成功后将版本号、主次版本、`latest` 和提交 SHA 标签发布到 GHCR 与 Docker Hub。
 
 ```bash
-git tag -a v0.1.0 -m "LightBWS v0.1.0"
 git push origin main
+git tag -a v0.1.1 -m "LightBWS v0.1.1"
 git push origin v0.1.1
 ```
 

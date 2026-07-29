@@ -42,6 +42,7 @@ async fn main() -> Result<()> {
     let state = AppState::new(db, &config).with_master_key(master_key);
     lightbws::domain::backups::recover_interrupted_jobs(&state.db).await?;
     tokio::spawn(lightbws::domain::backups::scheduler(state.clone()));
+    tokio::spawn(lightbws::domain::audit::scheduler(state.db.clone()));
     let listener = TcpListener::bind(config.bind).await?;
     tracing::info!(address = %config.bind, "LightBWS is listening");
     axum::serve(

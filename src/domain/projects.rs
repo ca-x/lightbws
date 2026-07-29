@@ -1,13 +1,13 @@
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter,
-    QueryOrder,
+    QueryOrder, TransactionTrait,
 };
 use serde::Serialize;
 use uuid::Uuid;
 
 use crate::{
     db::{Database, entities::project},
-    domain::{ORGANIZATION_ID, now, now_nanos},
+    domain::{ORGANIZATION_ID, access::Permission, next_sdk_revision, now},
     error::AppError,
 };
 
@@ -20,6 +20,7 @@ pub struct WebProject {
     pub deleted_at: Option<i64>,
     pub created_at: i64,
     pub updated_at: i64,
+    pub permissions: Permission,
 }
 
 #[derive(Clone)]
@@ -52,7 +53,8 @@ impl ProjectRepository {
     pub async fn create_plain(&self, name: &str) -> Result<WebProject, AppError> {
         let name = validate_name(name)?;
         let timestamp = now();
-        let revision_nanos = now_nanos();
+        let transaction = self.db.connection().begin().await?;
+        let revision_nanos = next_sdk_revision(&transaction).await?;
         let model = project::ActiveModel {
             id: Set(Uuid::new_v4().to_string()),
             organization_id: Set(ORGANIZATION_ID.into()),
@@ -63,16 +65,18 @@ impl ProjectRepository {
             updated_at: Set(timestamp),
             revision_nanos: Set(revision_nanos),
         }
-        .insert(self.db.connection())
+        .insert(&transaction)
         .await?;
+        transaction.commit().await?;
         WebProject::try_from(model)
     }
 
     pub async fn create_cipher(&self, name: String) -> Result<project::Model, AppError> {
         validate_cipher(&name)?;
         let timestamp = now();
-        let revision_nanos = now_nanos();
-        Ok(project::ActiveModel {
+        let transaction = self.db.connection().begin().await?;
+        let revision_nanos = next_sdk_revision(&transaction).await?;
+        let model = project::ActiveModel {
             id: Set(Uuid::new_v4().to_string()),
             organization_id: Set(ORGANIZATION_ID.into()),
             name_cipher: Set(Some(name)),
@@ -82,59 +86,83 @@ impl ProjectRepository {
             updated_at: Set(timestamp),
             revision_nanos: Set(revision_nanos),
         }
-        .insert(self.db.connection())
-        .await?)
+        .insert(&transaction)
+        .await?;
+        transaction.commit().await?;
+        Ok(model)
     }
 
     pub async fn update_plain(&self, id: Uuid, name: &str) -> Result<WebProject, AppError> {
-        let model = self.get(id).await?;
-        let revision_nanos = now_nanos().max(model.revision_nanos.saturating_add(1));
+        let transaction = self.db.connection().begin().await?;
+        let model = project::Entity::find_by_id(id.to_string())
+            .one(&transaction)
+            .await?
+            .ok_or(AppError::NotFound)?;
+        let revision_nanos = next_sdk_revision(&transaction).await?;
         let mut model = model.into_active_model();
         model.name_cipher = Set(None);
         model.name_plain = Set(Some(validate_name(name)?));
         model.updated_at = Set(now());
         model.revision_nanos = Set(revision_nanos);
-        WebProject::try_from(model.update(self.db.connection()).await?)
+        let model = model.update(&transaction).await?;
+        transaction.commit().await?;
+        WebProject::try_from(model)
     }
 
     pub async fn update_cipher(&self, id: Uuid, name: String) -> Result<project::Model, AppError> {
         validate_cipher(&name)?;
-        let model = self.get(id).await?;
-        let revision_nanos = now_nanos().max(model.revision_nanos.saturating_add(1));
+        let transaction = self.db.connection().begin().await?;
+        let model = project::Entity::find_by_id(id.to_string())
+            .one(&transaction)
+            .await?
+            .ok_or(AppError::NotFound)?;
+        let revision_nanos = next_sdk_revision(&transaction).await?;
         let mut model = model.into_active_model();
         model.name_cipher = Set(Some(name));
         model.name_plain = Set(None);
         model.updated_at = Set(now());
         model.revision_nanos = Set(revision_nanos);
-        Ok(model.update(self.db.connection()).await?)
+        let model = model.update(&transaction).await?;
+        transaction.commit().await?;
+        Ok(model)
     }
 
     pub async fn set_deleted(&self, ids: &[Uuid], deleted: bool) -> Result<(), AppError> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let transaction = self.db.connection().begin().await?;
+        let models = project::Entity::find()
+            .filter(project::Column::Id.is_in(ids.iter().map(Uuid::to_string)))
+            .all(&transaction)
+            .await?;
+        if models.is_empty() {
+            transaction.commit().await?;
+            return Ok(());
+        }
         let timestamp = now();
-        for id in ids {
-            let Some(model) = project::Entity::find_by_id(id.to_string())
-                .one(self.db.connection())
-                .await?
-            else {
-                continue;
-            };
-            let revision_nanos = now_nanos().max(model.revision_nanos.saturating_add(1));
+        let revision_nanos = next_sdk_revision(&transaction).await?;
+        for model in models {
             let mut active = model.into_active_model();
             active.deleted_at = Set(deleted.then_some(timestamp));
             active.updated_at = Set(timestamp);
             active.revision_nanos = Set(revision_nanos);
-            active.update(self.db.connection()).await?;
+            active.update(&transaction).await?;
         }
+        transaction.commit().await?;
         Ok(())
     }
 
     pub async fn purge(&self, id: Uuid) -> Result<(), AppError> {
+        let transaction = self.db.connection().begin().await?;
         let result = project::Entity::delete_by_id(id.to_string())
-            .exec(self.db.connection())
+            .exec(&transaction)
             .await?;
         if result.rows_affected == 0 {
             return Err(AppError::NotFound);
         }
+        next_sdk_revision(&transaction).await?;
+        transaction.commit().await?;
         Ok(())
     }
 }
@@ -152,6 +180,7 @@ impl TryFrom<project::Model> for WebProject {
             deleted_at: value.deleted_at,
             created_at: value.created_at,
             updated_at: value.updated_at,
+            permissions: Permission::FULL,
         })
     }
 }

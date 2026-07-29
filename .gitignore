@@ -3,6 +3,8 @@
 /web/dist/
 /web/*.tsbuildinfo
 /demo/sdk-demo/target/
+/dogfood-output/
+/tasks/
 /data/
 /.env
 /.env.local

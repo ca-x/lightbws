@@ -5,7 +5,7 @@ use axum::{
     routing::{get, post},
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, TransactionTrait};
+use sea_orm::{EntityTrait, QueryOrder, TransactionTrait};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -15,15 +15,17 @@ use crate::{
     db::entities::{sdk_sync_state, secret},
     domain::{
         ORGANIZATION_ID,
-        machines::{MachineRepository, SDK_SESSION_TTL_SECONDS},
+        access::{AccessPolicyInput, AccessRepository, GrantInput, Permission},
+        audit::{AuditActor, AuditRepository},
+        machines::{MachineAccount, MachineRepository, SDK_SESSION_TTL_SECONDS},
         projects::ProjectRepository,
         secrets::SecretRepository,
     },
     error::AppError,
     sdk_models::{
         CreateProjectRequest, CreateSecretRequest, DataResponse, DeleteResult, GetByIdsRequest,
-        IdentifierProject, SdkProject, SdkSecret, SecretIdentifier, SecretsListResponse,
-        SyncResponse, UpdateSecretRequest,
+        IdentifierProject, SdkProject, SdkSecret, SecretAccessPoliciesRequests, SecretIdentifier,
+        SecretsListResponse, SyncResponse, UpdateSecretRequest,
     },
 };
 
@@ -62,7 +64,9 @@ struct ProjectQuery {
     project_id: Option<Uuid>,
 }
 
-struct SdkAuth;
+pub(crate) struct SdkAuth {
+    pub machine: MachineAccount,
+}
 
 #[derive(Debug, Deserialize)]
 struct JwtSessionClaims {
@@ -83,10 +87,10 @@ impl FromRequestParts<AppState> for SdkAuth {
             .and_then(|value| value.strip_prefix("Bearer "))
             .ok_or(AppError::Unauthorized)?;
         let session_token = session_token_from_bearer(bearer);
-        MachineRepository::new(state.db.clone())
+        let machine = MachineRepository::new(state.db.clone())
             .authenticate_session(&session_token)
             .await?;
-        Ok(Self)
+        Ok(Self { machine })
     }
 }
 
@@ -129,7 +133,7 @@ async fn token(
     {
         return Err(AppError::Unauthorized);
     }
-    let repository = MachineRepository::new(state.db);
+    let repository = MachineRepository::new(state.db.clone());
     let machine = repository
         .authenticate(
             payload.client_id.as_deref().ok_or(AppError::Unauthorized)?,
@@ -140,6 +144,15 @@ async fn token(
         )
         .await?;
     let session_token = repository.create_session(machine.id).await?;
+    record_machine_event(
+        &state,
+        &machine,
+        "machine.login",
+        "machine",
+        machine.id,
+        "allowed",
+    )
+    .await?;
     Ok(Json(TokenResponse {
         access_token: session_jwt(&session_token, machine.client_id),
         expires_in: u64::try_from(SDK_SESSION_TTL_SECONDS).expect("positive SDK session TTL"),
@@ -180,72 +193,134 @@ fn session_token_from_bearer(bearer: &str) -> String {
 async fn list_projects(
     State(state): State<AppState>,
     Path(org_id): Path<Uuid>,
-    _auth: SdkAuth,
+    auth: SdkAuth,
 ) -> Result<Json<DataResponse<Vec<SdkProject>>>, AppError> {
     require_org(org_id)?;
-    let data = ProjectRepository::new(state.db)
-        .list(false)
-        .await?
-        .into_iter()
-        .filter(|project| project.name_cipher.is_some())
-        .map(SdkProject::try_from)
-        .collect::<Result<Vec<_>, _>>()?;
+    let access = AccessRepository::new(state.db.clone());
+    let mut data = Vec::new();
+    for project in ProjectRepository::new(state.db).list(false).await? {
+        if project.name_cipher.is_none() {
+            continue;
+        }
+        let id = Uuid::parse_str(&project.id).map_err(AppError::internal)?;
+        if access.machine_project(&auth.machine, id).await?.read {
+            data.push(SdkProject::try_from(project)?);
+        }
+    }
     Ok(Json(DataResponse { data }))
 }
 
 async fn get_project(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-    _auth: SdkAuth,
+    auth: SdkAuth,
 ) -> Result<Json<SdkProject>, AppError> {
-    let model = ProjectRepository::new(state.db).get(id).await?;
+    let model = ProjectRepository::new(state.db.clone()).get(id).await?;
     if model.deleted_at.is_some() {
         return Err(AppError::NotFound);
     }
+    AccessRepository::new(state.db.clone())
+        .machine_project(&auth.machine, id)
+        .await?
+        .require_read()?;
+    record_machine_event(
+        &state,
+        &auth.machine,
+        "project.read",
+        "project",
+        id,
+        "allowed",
+    )
+    .await?;
     Ok(Json(SdkProject::try_from(model)?))
 }
 
 async fn create_project(
     State(state): State<AppState>,
     Path(org_id): Path<Uuid>,
-    _auth: SdkAuth,
+    auth: SdkAuth,
     Json(input): Json<CreateProjectRequest>,
 ) -> Result<(StatusCode, Json<SdkProject>), AppError> {
     require_org(org_id)?;
-    let model = ProjectRepository::new(state.db)
+    let access = AccessRepository::new(state.db.clone());
+    if !access.machine_has_any_write(&auth.machine).await? {
+        return Err(AppError::Forbidden);
+    }
+    let model = ProjectRepository::new(state.db.clone())
         .create_cipher(input.name)
         .await?;
+    let id = Uuid::parse_str(&model.id).map_err(AppError::internal)?;
+    if !auth.machine.compatibility_account {
+        access
+            .grant_machine_project(auth.machine.id, id, Permission::FULL)
+            .await?;
+    }
+    record_machine_event(
+        &state,
+        &auth.machine,
+        "project.create",
+        "project",
+        id,
+        "changed",
+    )
+    .await?;
     Ok((StatusCode::CREATED, Json(SdkProject::try_from(model)?)))
 }
 
 async fn update_project(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-    _auth: SdkAuth,
+    auth: SdkAuth,
     Json(input): Json<CreateProjectRequest>,
 ) -> Result<Json<SdkProject>, AppError> {
-    let model = ProjectRepository::new(state.db)
+    AccessRepository::new(state.db.clone())
+        .machine_project(&auth.machine, id)
+        .await?
+        .require_write()?;
+    let model = ProjectRepository::new(state.db.clone())
         .update_cipher(id, input.name)
         .await?;
+    record_machine_event(
+        &state,
+        &auth.machine,
+        "project.update",
+        "project",
+        id,
+        "changed",
+    )
+    .await?;
     Ok(Json(SdkProject::try_from(model)?))
 }
 
 async fn delete_projects(
     State(state): State<AppState>,
-    _auth: SdkAuth,
+    auth: SdkAuth,
     Json(ids): Json<Vec<Uuid>>,
 ) -> Result<Json<DataResponse<Vec<DeleteResult>>>, AppError> {
-    let repository = ProjectRepository::new(state.db);
+    let repository = ProjectRepository::new(state.db.clone());
+    let access = AccessRepository::new(state.db.clone());
     let mut data = Vec::with_capacity(ids.len());
     for id in ids {
         let error = match repository.get(id).await {
-            Ok(_) => repository
-                .set_deleted(&[id], true)
-                .await
-                .err()
-                .map(|_| "Delete failed".into()),
+            Ok(_) => match access.machine_project(&auth.machine, id).await {
+                Ok(permission) if permission.write => repository
+                    .set_deleted(&[id], true)
+                    .await
+                    .err()
+                    .map(|_| "Delete failed".into()),
+                _ => Some("Permission denied".into()),
+            },
             Err(_) => Some("Not found".into()),
         };
+        record_machine_event(
+            &state,
+            &auth.machine,
+            "project.trash",
+            "project",
+            id,
+            if error.is_none() { "changed" } else { "denied" },
+        )
+        .await?;
         data.push(DeleteResult { id, error });
     }
     Ok(Json(DataResponse { data }))
@@ -255,25 +330,27 @@ async fn list_secrets(
     State(state): State<AppState>,
     Path(org_id): Path<Uuid>,
     Query(query): Query<ProjectQuery>,
-    _auth: SdkAuth,
+    auth: SdkAuth,
 ) -> Result<Json<SecretsListResponse>, AppError> {
     require_org(org_id)?;
-    identifiers(&state, query.project_id).await
+    identifiers(&state, &auth.machine, query.project_id).await
 }
 
 async fn list_project_secrets(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
-    _auth: SdkAuth,
+    auth: SdkAuth,
 ) -> Result<Json<SecretsListResponse>, AppError> {
-    identifiers(&state, Some(project_id)).await
+    identifiers(&state, &auth.machine, Some(project_id)).await
 }
 
 async fn identifiers(
     state: &AppState,
+    machine: &MachineAccount,
     project_id: Option<Uuid>,
 ) -> Result<Json<SecretsListResponse>, AppError> {
     let repository = SecretRepository::new(state.db.clone());
+    let access = AccessRepository::new(state.db.clone());
     let mut secrets = Vec::new();
     for model in repository
         .list(false, project_id)
@@ -281,26 +358,25 @@ async fn identifiers(
         .into_iter()
         .filter(|model| model.key_cipher.is_some())
     {
-        let projects = if let Some(project_id) = model.project_id.as_deref() {
-            let project_id = Uuid::parse_str(project_id).map_err(AppError::internal)?;
-            let project = ProjectRepository::new(state.db.clone())
-                .get(project_id)
-                .await?;
-            project
-                .name_cipher
-                .map(|name| {
-                    vec![IdentifierProject {
-                        id: project_id,
-                        name,
-                    }]
-                })
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        };
+        if !access.machine_secret(machine, &model).await?.read {
+            continue;
+        }
+        let project_id = Uuid::parse_str(&model.project_id).map_err(AppError::internal)?;
+        let project = ProjectRepository::new(state.db.clone())
+            .get(project_id)
+            .await?;
+        let projects = project
+            .name_cipher
+            .map(|name| {
+                vec![IdentifierProject {
+                    id: project_id,
+                    name,
+                }]
+            })
+            .unwrap_or_default();
         secrets.push(SecretIdentifier {
             id: Uuid::parse_str(&model.id).map_err(AppError::internal)?,
-            organization_id: Uuid::parse_str(&model.organization_id).map_err(AppError::internal)?,
+            organization_id: Uuid::parse_str(ORGANIZATION_ID).map_err(AppError::internal)?,
             key: model.key_cipher.unwrap_or_default(),
             projects,
         });
@@ -311,83 +387,147 @@ async fn identifiers(
 async fn get_secret(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-    _auth: SdkAuth,
+    auth: SdkAuth,
 ) -> Result<Json<SdkSecret>, AppError> {
-    let model = SecretRepository::new(state.db).get(id).await?;
+    let model = SecretRepository::new(state.db.clone()).get(id).await?;
     if model.deleted_at.is_some() {
         return Err(AppError::NotFound);
     }
+    AccessRepository::new(state.db.clone())
+        .machine_secret(&auth.machine, &model)
+        .await?
+        .require_read()?;
+    record_machine_event(
+        &state,
+        &auth.machine,
+        "secret.read",
+        "secret",
+        id,
+        "allowed",
+    )
+    .await?;
     Ok(Json(SdkSecret::try_from(model)?))
 }
 
 async fn create_secret(
     State(state): State<AppState>,
     Path(org_id): Path<Uuid>,
-    _auth: SdkAuth,
+    auth: SdkAuth,
     Json(input): Json<CreateSecretRequest>,
 ) -> Result<(StatusCode, Json<SdkSecret>), AppError> {
     require_org(org_id)?;
-    let model = SecretRepository::new(state.db)
-        .create_cipher(
-            input.key,
-            input.value,
-            input.note,
-            first_project(input.project_ids),
-        )
+    let project_id = required_project(input.project_ids)?;
+    AccessRepository::new(state.db.clone())
+        .machine_project(&auth.machine, project_id)
+        .await?
+        .require_write()?;
+    let policies = input.access_policies_requests;
+    let model = SecretRepository::new(state.db.clone())
+        .create_cipher(input.key, input.value, input.note, project_id)
         .await?;
+    let id = Uuid::parse_str(&model.id).map_err(AppError::internal)?;
+    if let Some(policies) = policies {
+        AccessRepository::new(state.db.clone())
+            .replace_secret(id, &sdk_policy(policies))
+            .await?;
+    }
+    record_machine_event(
+        &state,
+        &auth.machine,
+        "secret.create",
+        "secret",
+        id,
+        "changed",
+    )
+    .await?;
     Ok((StatusCode::CREATED, Json(SdkSecret::try_from(model)?)))
 }
 
 async fn update_secret(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-    _auth: SdkAuth,
+    auth: SdkAuth,
     Json(input): Json<UpdateSecretRequest>,
 ) -> Result<Json<SdkSecret>, AppError> {
     let _ = input.value_changed;
-    let model = SecretRepository::new(state.db)
-        .update_cipher(
-            id,
-            input.key,
-            input.value,
-            input.note,
-            first_project(input.project_ids),
-        )
+    let repository = SecretRepository::new(state.db.clone());
+    let existing = repository.get(id).await?;
+    AccessRepository::new(state.db.clone())
+        .machine_secret(&auth.machine, &existing)
+        .await?
+        .require_write()?;
+    let project_id = required_project(input.project_ids)?;
+    if existing.project_id != project_id.to_string() {
+        AccessRepository::new(state.db.clone())
+            .machine_project(&auth.machine, project_id)
+            .await?
+            .require_write()?;
+    }
+    let policies = input.access_policies_requests;
+    let model = repository
+        .update_cipher(id, input.key, input.value, input.note, project_id)
         .await?;
+    if let Some(policies) = policies {
+        AccessRepository::new(state.db.clone())
+            .replace_secret(id, &sdk_policy(policies))
+            .await?;
+    }
+    record_machine_event(
+        &state,
+        &auth.machine,
+        "secret.update",
+        "secret",
+        id,
+        "changed",
+    )
+    .await?;
     Ok(Json(SdkSecret::try_from(model)?))
 }
 
 async fn get_secrets_by_ids(
     State(state): State<AppState>,
-    _auth: SdkAuth,
+    auth: SdkAuth,
     Json(input): Json<GetByIdsRequest>,
 ) -> Result<Json<DataResponse<Vec<SdkSecret>>>, AppError> {
-    let data = SecretRepository::new(state.db)
-        .get_many(&input.ids)
-        .await?
-        .into_iter()
-        .filter(|secret| secret.key_cipher.is_some())
-        .map(SdkSecret::try_from)
-        .collect::<Result<Vec<_>, _>>()?;
+    let access = AccessRepository::new(state.db.clone());
+    let mut data = Vec::new();
+    for model in SecretRepository::new(state.db).get_many(&input.ids).await? {
+        if model.key_cipher.is_some() && access.machine_secret(&auth.machine, &model).await?.read {
+            data.push(SdkSecret::try_from(model)?);
+        }
+    }
     Ok(Json(DataResponse { data }))
 }
 
 async fn delete_secrets(
     State(state): State<AppState>,
-    _auth: SdkAuth,
+    auth: SdkAuth,
     Json(ids): Json<Vec<Uuid>>,
 ) -> Result<Json<DataResponse<Vec<DeleteResult>>>, AppError> {
-    let repository = SecretRepository::new(state.db);
+    let repository = SecretRepository::new(state.db.clone());
+    let access = AccessRepository::new(state.db.clone());
     let mut data = Vec::with_capacity(ids.len());
     for id in ids {
         let error = match repository.get(id).await {
-            Ok(_) => repository
-                .set_deleted(&[id], true)
-                .await
-                .err()
-                .map(|_| "Delete failed".into()),
+            Ok(model) => match access.machine_secret(&auth.machine, &model).await {
+                Ok(permission) if permission.write => repository
+                    .set_deleted(&[id], true)
+                    .await
+                    .err()
+                    .map(|_| "Delete failed".into()),
+                _ => Some("Permission denied".into()),
+            },
             Err(_) => Some("Not found".into()),
         };
+        record_machine_event(
+            &state,
+            &auth.machine,
+            "secret.trash",
+            "secret",
+            id,
+            if error.is_none() { "changed" } else { "denied" },
+        )
+        .await?;
         data.push(DeleteResult { id, error });
     }
     Ok(Json(DataResponse { data }))
@@ -397,7 +537,7 @@ async fn sync_secrets(
     State(state): State<AppState>,
     Path(org_id): Path<Uuid>,
     Query(query): Query<SyncQuery>,
-    _auth: SdkAuth,
+    auth: SdkAuth,
 ) -> Result<Json<SyncResponse>, AppError> {
     require_org(org_id)?;
     let last = query
@@ -414,20 +554,23 @@ async fn sync_secrets(
         .ok_or_else(|| AppError::internal(anyhow::anyhow!("SDK state is missing")))?
         .revision_nanos;
     let models = secret::Entity::find()
-        .filter(secret::Column::OrganizationId.eq(ORGANIZATION_ID))
         .order_by_desc(secret::Column::RevisionNanos)
         .all(&transaction)
         .await?;
     transaction.commit().await?;
     let has_changes = last.is_none_or(|last| i128::from(revision) > last);
+    let access = AccessRepository::new(state.db);
     let secrets = if has_changes {
-        Some(DataResponse {
-            data: models
-                .into_iter()
-                .filter(|secret| secret.deleted_at.is_none() && secret.key_cipher.is_some())
-                .map(SdkSecret::try_from)
-                .collect::<Result<Vec<_>, _>>()?,
-        })
+        let mut data = Vec::new();
+        for model in models {
+            if model.deleted_at.is_none()
+                && model.key_cipher.is_some()
+                && access.machine_secret(&auth.machine, &model).await?.read
+            {
+                data.push(SdkSecret::try_from(model)?);
+            }
+        }
+        Some(DataResponse { data })
     } else {
         None
     };
@@ -454,6 +597,25 @@ pub async fn help() -> Json<Value> {
     }))
 }
 
+async fn record_machine_event(
+    state: &AppState,
+    machine: &MachineAccount,
+    action: &str,
+    resource_kind: &str,
+    resource_id: Uuid,
+    outcome: &str,
+) -> Result<(), AppError> {
+    AuditRepository::new(state.db.clone())
+        .record(
+            AuditActor::Machine(machine.id),
+            action,
+            resource_kind,
+            Some(resource_id),
+            outcome,
+        )
+        .await
+}
+
 async fn echo(_auth: SdkAuth, headers: HeaderMap, Json(value): Json<Value>) -> Json<Value> {
     let _ = headers;
     Json(value)
@@ -467,6 +629,31 @@ fn require_org(id: Uuid) -> Result<(), AppError> {
     }
 }
 
-fn first_project(ids: Option<Vec<Uuid>>) -> Option<Uuid> {
-    ids.and_then(|ids| ids.into_iter().next())
+fn required_project(ids: Option<Vec<Uuid>>) -> Result<Uuid, AppError> {
+    let ids = ids.ok_or_else(|| AppError::Validation("a project is required".into()))?;
+    if ids.len() != 1 {
+        return Err(AppError::Validation(
+            "exactly one project is required".into(),
+        ));
+    }
+    Ok(ids[0])
+}
+
+fn sdk_policy(input: SecretAccessPoliciesRequests) -> AccessPolicyInput {
+    fn grants(values: Option<Vec<crate::sdk_models::AccessPolicyRequest>>) -> Vec<GrantInput> {
+        values
+            .unwrap_or_default()
+            .into_iter()
+            .map(|grant| GrantInput {
+                grantee_id: grant.grantee_id,
+                read: grant.read,
+                write: grant.write,
+            })
+            .collect()
+    }
+    AccessPolicyInput {
+        users: grants(input.user_access_policy_requests),
+        groups: grants(input.group_access_policy_requests),
+        machines: grants(input.service_account_access_policy_requests),
+    }
 }
