@@ -67,9 +67,12 @@ impl BackupScopes {
     }
 
     pub fn validate(self) -> Result<(), AppError> {
-        if (self.machine_accounts && !self.identities)
-            || (self.access_policies && (!self.identities || !self.machine_accounts))
-        {
+        if self.machine_accounts && !self.identities {
+            return Err(AppError::Validation(
+                "backup scope dependencies are incomplete".into(),
+            ));
+        }
+        if self.access_policies && (!self.identities || !self.machine_accounts) {
             return Err(AppError::Validation(
                 "backup scope dependencies are incomplete".into(),
             ));
