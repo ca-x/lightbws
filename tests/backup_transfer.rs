@@ -130,6 +130,48 @@ async fn portable_export_round_trips_projects_and_secrets() {
 }
 
 #[tokio::test]
+async fn scoped_backup_round_trips_unassigned_encrypted_secrets() {
+    let source_data = tempfile::tempdir().expect("source tempdir");
+    let source = Database::connect(&source_data.path().join("source-unassigned.sqlite3"))
+        .await
+        .expect("source database");
+    let project = ProjectRepository::new(source.clone())
+        .create_sdk("Disposable SDK project")
+        .await
+        .expect("SDK project");
+    let secret = SecretRepository::new(source.clone())
+        .create_web("PRESERVED", "encrypted value", "runtime", project.id)
+        .await
+        .expect("encrypted secret");
+    ProjectRepository::new(source.clone())
+        .purge(project.id)
+        .await
+        .expect("purge project");
+
+    let master_key = MasterKey::random().expect("master key");
+    let dump = dump_database_scoped(&source, &master_key, BackupScopes::default())
+        .await
+        .expect("dump unassigned encrypted secret");
+    let target_data = tempfile::tempdir().expect("target tempdir");
+    let target = Database::connect(&target_data.path().join("target-unassigned.sqlite3"))
+        .await
+        .expect("target database");
+    import_database_scoped(&target, &master_key, &dump, false, false)
+        .await
+        .expect("restore unassigned encrypted secret");
+
+    let restored = SecretRepository::new(target)
+        .get(secret.id)
+        .await
+        .expect("restored secret");
+    assert_eq!(restored.project_id, None);
+    assert!(restored.key_cipher.is_some());
+    assert!(restored.value_cipher.is_some());
+    assert!(restored.note_cipher.is_some());
+    assert_eq!(restored.key_plain, None);
+}
+
+#[tokio::test]
 async fn full_instance_dump_rebuilds_persistent_application_state() {
     let source_data = tempfile::tempdir().expect("source tempdir");
     let source = Database::connect(&source_data.path().join("source-full.sqlite3"))

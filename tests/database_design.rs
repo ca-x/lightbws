@@ -128,35 +128,44 @@ async fn schema_contains_every_record_table_and_supporting_structure() {
 async fn purging_a_project_preserves_its_secrets_as_unassigned() {
     let (_data, db) = database().await;
     let projects = ProjectRepository::new(db.clone());
-    let project = projects
+    let legacy_project = projects
         .create_plain("Disposable project")
         .await
         .expect("project");
+    let sdk_project = projects
+        .create_sdk("Disposable SDK project")
+        .await
+        .expect("SDK project");
     let secrets = SecretRepository::new(db);
     let secret = secrets
-        .create_plain("PRESERVED", "value", "", project.id)
+        .create_plain("PRESERVED", "value", "", legacy_project.id)
         .await
         .expect("secret");
     let sdk_secret = secrets
-        .create_cipher(
-            "cipher-key".into(),
-            "cipher-value".into(),
-            "cipher-note".into(),
-            project.id,
-        )
+        .create_web("SDK_PRESERVED", "sdk-value", "sdk-note", sdk_project.id)
         .await
         .expect("SDK secret");
 
-    projects.purge(project.id).await.expect("purge project");
+    projects
+        .purge(legacy_project.id)
+        .await
+        .expect("purge legacy project");
+    projects
+        .purge(sdk_project.id)
+        .await
+        .expect("purge SDK project");
 
     let preserved = secrets.get(secret.id).await.expect("preserved secret");
     assert_eq!(preserved.project_id, None);
-    assert!(
-        secrets
-            .get(Uuid::parse_str(&sdk_secret.id).expect("SDK secret id"))
-            .await
-            .is_err()
-    );
+    let sdk_preserved = secrets
+        .get(sdk_secret.id)
+        .await
+        .expect("preserved SDK secret");
+    assert_eq!(sdk_preserved.project_id, None);
+    assert!(sdk_preserved.key_cipher.is_some());
+    assert!(sdk_preserved.value_cipher.is_some());
+    assert!(sdk_preserved.note_cipher.is_some());
+    assert_eq!(sdk_preserved.key_plain, None);
 }
 
 #[tokio::test]

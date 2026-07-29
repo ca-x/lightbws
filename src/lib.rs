@@ -5,6 +5,7 @@ pub mod crypto;
 pub mod db;
 pub mod domain;
 pub mod error;
+mod sdk_crypto;
 pub mod sdk_models;
 pub mod web;
 

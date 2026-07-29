@@ -362,20 +362,23 @@ async fn identifiers(
         if !access.machine_secret(machine, &model).await?.read {
             continue;
         }
-        let project_id = Uuid::parse_str(model.project_id.as_deref().ok_or(AppError::NotFound)?)
-            .map_err(AppError::internal)?;
-        let project = ProjectRepository::new(state.db.clone())
-            .get(project_id)
-            .await?;
-        let projects = project
-            .name_cipher
-            .map(|name| {
-                vec![IdentifierProject {
-                    id: project_id,
-                    name,
-                }]
-            })
-            .unwrap_or_default();
+        let projects = if let Some(project_id) = model.project_id.as_deref() {
+            let project_id = Uuid::parse_str(project_id).map_err(AppError::internal)?;
+            let project = ProjectRepository::new(state.db.clone())
+                .get(project_id)
+                .await?;
+            project
+                .name_cipher
+                .map(|name| {
+                    vec![IdentifierProject {
+                        id: project_id,
+                        name,
+                    }]
+                })
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         secrets.push(SecretIdentifier {
             id: Uuid::parse_str(&model.id).map_err(AppError::internal)?,
             organization_id: Uuid::parse_str(ORGANIZATION_ID).map_err(AppError::internal)?,
@@ -418,11 +421,16 @@ async fn create_secret(
     Json(input): Json<CreateSecretRequest>,
 ) -> Result<(StatusCode, Json<SdkSecret>), AppError> {
     require_org(org_id)?;
-    let project_id = required_project(input.project_ids)?;
-    AccessRepository::new(state.db.clone())
-        .machine_project(&auth.machine, project_id)
-        .await?
-        .require_write()?;
+    let project_id = single_project(input.project_ids)?;
+    let access = AccessRepository::new(state.db.clone());
+    if let Some(project_id) = project_id {
+        access
+            .machine_project(&auth.machine, project_id)
+            .await?
+            .require_write()?;
+    } else if !access.machine_has_any_write(&auth.machine).await? {
+        return Err(AppError::Forbidden);
+    }
     let policies = input.access_policies_requests;
     let model = SecretRepository::new(state.db.clone())
         .create_cipher(input.key, input.value, input.note, project_id)
@@ -458,8 +466,10 @@ async fn update_secret(
         .machine_secret(&auth.machine, &existing)
         .await?
         .require_write()?;
-    let project_id = required_project(input.project_ids)?;
-    if existing.project_id != Some(project_id.to_string()) {
+    let project_id = single_project(input.project_ids)?;
+    if existing.project_id != project_id.map(|id| id.to_string())
+        && let Some(project_id) = project_id
+    {
         AccessRepository::new(state.db.clone())
             .machine_project(&auth.machine, project_id)
             .await?
@@ -631,14 +641,14 @@ fn require_org(id: Uuid) -> Result<(), AppError> {
     }
 }
 
-fn required_project(ids: Option<Vec<Uuid>>) -> Result<Uuid, AppError> {
-    let ids = ids.ok_or_else(|| AppError::Validation("a project is required".into()))?;
-    if ids.len() != 1 {
+fn single_project(ids: Option<Vec<Uuid>>) -> Result<Option<Uuid>, AppError> {
+    let ids = ids.unwrap_or_default();
+    if ids.len() > 1 {
         return Err(AppError::Validation(
-            "exactly one project is required".into(),
+            "at most one project is allowed".into(),
         ));
     }
-    Ok(ids[0])
+    Ok(ids.into_iter().next())
 }
 
 fn sdk_policy(input: SecretAccessPoliciesRequests) -> AccessPolicyInput {

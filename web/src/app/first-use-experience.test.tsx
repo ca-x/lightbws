@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { Providers } from "./Providers"
-import type { Secret, Session, User } from "./types"
+import type { Project, Secret, Session, User } from "./types"
 
 const mocks = vi.hoisted(() => ({
   groups: vi.fn(),
@@ -39,6 +39,15 @@ const secret: Secret = {
   value: "secret-value",
   note: "",
   sdkEncrypted: false,
+  deletedAt: null,
+  permissions: { read: true, write: true },
+  createdAt: 1,
+  updatedAt: 1,
+}
+const project: Project = {
+  id: "project-1",
+  name: "Production",
+  sdkEncrypted: true,
   deletedAt: null,
   permissions: { read: true, write: true },
   createdAt: 1,
@@ -96,6 +105,17 @@ describe("first-use experience", () => {
     expect(navigator.clipboard.writeText).toHaveBeenLastCalledWith("secret-value")
   })
 
+  it("defaults a new secret to no project even when projects exist", async () => {
+    mocks.projects.mockResolvedValue([project])
+    history.replaceState(null, "", "/#secrets")
+    render(<Providers><App /></Providers>)
+
+    await userEvent.click(await screen.findByRole("button", { name: /new secret/i }))
+
+    expect(screen.getByRole("combobox", { name: "Project" })).toHaveValue("")
+    expect(screen.getByText("No project is selected. Grant people or machine accounts direct access; fnox requires a project.")).toBeInTheDocument()
+  })
+
   it("guides a single-admin workspace to add users before groups", async () => {
     history.replaceState(null, "", "/#groups")
     render(<Providers><App /></Providers>)
@@ -103,6 +123,18 @@ describe("first-use experience", () => {
     expect(await screen.findByRole("heading", { name: "Add users before groups" })).toBeInTheDocument()
     await userEvent.click(screen.getByRole("button", { name: "Add a user first" }))
     await waitFor(() => expect(location.hash).toBe("#users"))
+  })
+
+  it("shows loading instead of a false empty state while users are requested", async () => {
+    let resolveUsers!: (users: User[]) => void
+    mocks.users.mockReturnValueOnce(new Promise<User[]>((resolve) => { resolveUsers = resolve }))
+    history.replaceState(null, "", "/#users")
+    render(<Providers><App /></Providers>)
+
+    expect(await screen.findByTestId("page-skeleton")).toHaveAttribute("aria-label", "Loading workspace…")
+    expect(screen.queryByRole("heading", { name: "No users are available" })).not.toBeInTheDocument()
+    resolveUsers([admin])
+    expect(await screen.findByText("admin")).toBeInTheDocument()
   })
 
   it("provides an in-app help entry with scenario-based guidance", async () => {
@@ -113,5 +145,17 @@ describe("first-use experience", () => {
     expect(screen.getByRole("heading", { name: "Connect an app, CI job, BWS, or fnox" })).toBeInTheDocument()
     expect(screen.getByText(location.origin)).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Help" })).toBeInTheDocument()
+  })
+
+  it("scrolls within help without replacing the hash route", async () => {
+    const scrollIntoView = vi.fn()
+    Element.prototype.scrollIntoView = scrollIntoView
+    history.replaceState(null, "", "/#help")
+    render(<Providers><App /></Providers>)
+
+    await userEvent.click(await screen.findByRole("button", { name: "Connect an app, CI job, BWS, or fnox" }))
+
+    expect(location.hash).toBe("#help")
+    expect(scrollIntoView).toHaveBeenCalledWith(expect.objectContaining({ block: "start" }))
   })
 })

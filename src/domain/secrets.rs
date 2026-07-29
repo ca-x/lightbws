@@ -12,6 +12,7 @@ use crate::{
     },
     domain::{access::Permission, next_sdk_revision, now},
     error::AppError,
+    sdk_crypto,
 };
 
 #[derive(Clone, Debug, Serialize)]
@@ -104,21 +105,52 @@ impl SecretRepository {
         WebSecret::try_from(model)
     }
 
+    pub async fn create_web(
+        &self,
+        key: &str,
+        value: &str,
+        note: &str,
+        project_id: impl Into<Option<Uuid>>,
+    ) -> Result<WebSecret, AppError> {
+        validate_plain(key, value, note)?;
+        let project_id = project_id.into();
+        let sdk_encrypted = match project_id {
+            Some(project_id) => self.get_project(project_id).await?.name_cipher.is_some(),
+            None => true,
+        };
+        if sdk_encrypted {
+            let model = self
+                .create_cipher(
+                    sdk_crypto::encrypt(key.trim())?,
+                    sdk_crypto::encrypt(value)?,
+                    sdk_crypto::encrypt(note)?,
+                    project_id,
+                )
+                .await?;
+            WebSecret::try_from(model)
+        } else {
+            self.create_plain(key, value, note, project_id).await
+        }
+    }
+
     pub async fn create_cipher(
         &self,
         key: String,
         value: String,
         note: String,
-        project_id: Uuid,
+        project_id: impl Into<Option<Uuid>>,
     ) -> Result<secret::Model, AppError> {
         validate_cipher(&key, &value, &note)?;
+        let project_id = project_id.into();
         let timestamp = now();
         let transaction = self.db.connection().begin().await?;
-        require_active_project(&transaction, project_id).await?;
+        if let Some(project_id) = project_id {
+            require_active_project(&transaction, project_id).await?;
+        }
         let revision_nanos = next_sdk_revision(&transaction).await?;
         let model = secret::ActiveModel {
             id: Set(Uuid::new_v4().to_string()),
-            project_id: Set(Some(project_id.to_string())),
+            project_id: Set(project_id.map(|id| id.to_string())),
             key_cipher: Set(Some(key)),
             value_cipher: Set(Some(value)),
             note_cipher: Set(Some(note)),
@@ -170,17 +202,51 @@ impl SecretRepository {
         WebSecret::try_from(model)
     }
 
+    pub async fn update_web(
+        &self,
+        id: Uuid,
+        key: &str,
+        value: &str,
+        note: &str,
+        project_id: impl Into<Option<Uuid>>,
+    ) -> Result<WebSecret, AppError> {
+        validate_plain(key, value, note)?;
+        let project_id = project_id.into();
+        let existing = self.get(id).await?;
+        let sdk_encrypted = match project_id {
+            Some(project_id) => self.get_project(project_id).await?.name_cipher.is_some(),
+            None => existing.key_cipher.is_some(),
+        };
+        if sdk_encrypted {
+            let model = self
+                .update_cipher(
+                    id,
+                    sdk_crypto::encrypt(key.trim())?,
+                    sdk_crypto::encrypt(value)?,
+                    sdk_crypto::encrypt(note)?,
+                    project_id,
+                )
+                .await?;
+            WebSecret::try_from(model)
+        } else {
+            self.update_plain(id, key, value, note, project_id).await
+        }
+    }
+
     pub async fn update_cipher(
         &self,
         id: Uuid,
         key: String,
         value: String,
         note: String,
-        project_id: Uuid,
+        project_id: impl Into<Option<Uuid>>,
     ) -> Result<secret::Model, AppError> {
         validate_cipher(&key, &value, &note)?;
+        let project_id = project_id.into();
         let transaction = self.db.connection().begin().await?;
-        require_active_project(&transaction, project_id).await?;
+        if let Some(project_id) = project_id {
+            require_active_project(&transaction, project_id).await?;
+        }
         let model = secret::Entity::find_by_id(id.to_string())
             .one(&transaction)
             .await?
@@ -193,7 +259,7 @@ impl SecretRepository {
         active.key_plain = Set(None);
         active.value_plain = Set(None);
         active.note_plain = Set(None);
-        active.project_id = Set(Some(project_id.to_string()));
+        active.project_id = Set(project_id.map(|id| id.to_string()));
         active.updated_at = Set(now());
         active.revision_nanos = Set(revision_nanos);
         let model = active.update(&transaction).await?;
@@ -243,6 +309,16 @@ impl SecretRepository {
         transaction.commit().await?;
         Ok(())
     }
+
+    async fn get_project(&self, id: Uuid) -> Result<project::Model, AppError> {
+        project::Entity::find_by_id(id.to_string())
+            .filter(project::Column::DeletedAt.is_null())
+            .one(self.db.connection())
+            .await?
+            .ok_or_else(|| {
+                AppError::Validation("secret project does not exist or is deleted".into())
+            })
+    }
 }
 
 impl TryFrom<secret::Model> for WebSecret {
@@ -256,11 +332,23 @@ impl TryFrom<secret::Model> for WebSecret {
                 .project_id
                 .map(|id| Uuid::parse_str(&id).map_err(AppError::internal))
                 .transpose()?,
-            key: value
-                .key_plain
-                .unwrap_or_else(|| "Encrypted SDK secret".into()),
-            value: value.value_plain,
-            note: value.note_plain.unwrap_or_default(),
+            key: match (value.key_plain, value.key_cipher) {
+                (Some(key), _) => key,
+                (_, Some(cipher)) => {
+                    sdk_crypto::decrypt(&cipher).unwrap_or_else(|_| "Encrypted SDK secret".into())
+                }
+                _ => return Err(AppError::internal(anyhow::anyhow!("secret key missing"))),
+            },
+            value: match (value.value_plain, value.value_cipher) {
+                (Some(value), _) => Some(value),
+                (_, Some(cipher)) => sdk_crypto::decrypt(&cipher).ok(),
+                _ => None,
+            },
+            note: match (value.note_plain, value.note_cipher) {
+                (Some(note), _) => note,
+                (_, Some(cipher)) => sdk_crypto::decrypt(&cipher).unwrap_or_default(),
+                _ => String::new(),
+            },
             sdk_encrypted,
             deleted_at: value.deleted_at,
             created_at: value.created_at,

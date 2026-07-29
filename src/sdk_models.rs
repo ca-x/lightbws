@@ -22,12 +22,17 @@ pub struct SdkProject {
 pub struct SdkSecret {
     pub id: Uuid,
     pub organization_id: Uuid,
-    pub project_id: Option<Uuid>,
+    pub projects: Vec<SdkSecretProject>,
     pub key: String,
     pub value: String,
     pub note: String,
     pub creation_date: String,
     pub revision_date: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SdkSecretProject {
+    pub id: Uuid,
 }
 
 #[derive(Debug, Serialize)]
@@ -140,9 +145,13 @@ impl TryFrom<secret::Model> for SdkSecret {
         Ok(Self {
             id: parse_uuid(&value.id)?,
             organization_id: parse_uuid(ORGANIZATION_ID)?,
-            project_id: Some(parse_uuid(
-                value.project_id.as_deref().ok_or(AppError::NotFound)?,
-            )?),
+            projects: value
+                .project_id
+                .as_deref()
+                .map(parse_uuid)
+                .transpose()?
+                .map(|id| vec![SdkSecretProject { id }])
+                .unwrap_or_default(),
             key: value.key_cipher.ok_or(AppError::NotFound)?,
             value: value.value_cipher.ok_or(AppError::NotFound)?,
             note: value.note_cipher.unwrap_or_default(),

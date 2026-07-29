@@ -144,7 +144,7 @@ async fn create_project(
 ) -> Result<(StatusCode, Json<WebProject>), AppError> {
     require_admin(&mutation.0.user)?;
     let project = ProjectRepository::new(state.db.clone())
-        .create_plain(&input.name)
+        .create_sdk(&input.name)
         .await?;
     record_user_event(
         &state,
@@ -165,7 +165,7 @@ async fn update_project(
 ) -> Result<Json<WebProject>, AppError> {
     require_admin(&mutation.0.user)?;
     let project = ProjectRepository::new(state.db.clone())
-        .update_plain(id, &input.name)
+        .update_web(id, &input.name)
         .await?;
     record_user_event(&state, mutation.0.user_id, "project.update", "project", id).await?;
     Ok(Json(project))
@@ -268,7 +268,7 @@ async fn create_secret(
         Permission::FULL
     };
     let mut secret = SecretRepository::new(state.db.clone())
-        .create_plain(&input.key, &input.value, &input.note, input.project_id)
+        .create_web(&input.key, &input.value, &input.note, input.project_id)
         .await?;
     secret.permissions = permissions;
     record_user_event(
@@ -311,7 +311,7 @@ async fn update_secret(
         Permission::FULL
     };
     let mut secret = repository
-        .update_plain(id, &input.key, &input.value, &input.note, input.project_id)
+        .update_web(id, &input.key, &input.value, &input.note, input.project_id)
         .await?;
     secret.permissions = target;
     record_user_event(&state, mutation.0.user_id, "secret.update", "secret", id).await?;

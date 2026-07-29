@@ -96,6 +96,153 @@ impl Fixture {
 }
 
 #[tokio::test]
+async fn web_created_projects_and_secrets_are_sdk_compatible_by_default() {
+    let fixture = Fixture::new().await;
+    let (admin_cookies, admin_csrf) = fixture.login("admin").await;
+
+    let project = fixture
+        .request(json_request(
+            Method::POST,
+            "/api/v1/projects",
+            Some(json!({ "name": "Web SDK project" })),
+            Some(&admin_cookies),
+            Some(&admin_csrf),
+        ))
+        .await;
+    assert_eq!(project.status(), StatusCode::CREATED);
+    let project = response_json(project).await;
+    assert_eq!(project["name"], "Web SDK project");
+    assert_eq!(project["sdkEncrypted"], true);
+    let project_id = project["id"].as_str().unwrap();
+
+    let secret = fixture
+        .request(json_request(
+            Method::POST,
+            "/api/v1/secrets",
+            Some(json!({
+                "key": "WEB_CREATED_KEY",
+                "value": "web-created-value",
+                "note": "created from the browser",
+                "projectId": project_id
+            })),
+            Some(&admin_cookies),
+            Some(&admin_csrf),
+        ))
+        .await;
+    assert_eq!(secret.status(), StatusCode::CREATED);
+    let secret = response_json(secret).await;
+    assert_eq!(secret["key"], "WEB_CREATED_KEY");
+    assert_eq!(secret["value"], "web-created-value");
+    assert_eq!(secret["note"], "created from the browser");
+    assert_eq!(secret["sdkEncrypted"], true);
+
+    let updated = fixture
+        .request(json_request(
+            Method::PUT,
+            &format!("/api/v1/projects/{project_id}"),
+            Some(json!({ "name": "Renamed in Web" })),
+            Some(&admin_cookies),
+            Some(&admin_csrf),
+        ))
+        .await;
+    assert_eq!(updated.status(), StatusCode::OK);
+    let updated = response_json(updated).await;
+    assert_eq!(updated["name"], "Renamed in Web");
+    assert_eq!(updated["sdkEncrypted"], true);
+
+    let machine = fixture
+        .request(json_request(
+            Method::POST,
+            "/api/v1/admin/machines",
+            Some(json!({ "name": "web-sdk-reader" })),
+            Some(&admin_cookies),
+            Some(&admin_csrf),
+        ))
+        .await;
+    assert_eq!(machine.status(), StatusCode::CREATED);
+    let machine = response_json(machine).await;
+    let machine_id = machine["id"].as_str().unwrap();
+    let access_token = machine["accessToken"].as_str().unwrap();
+
+    let access = fixture
+        .request(json_request(
+            Method::PUT,
+            &format!("/api/v1/machines/{machine_id}/access"),
+            Some(json!({
+                "users": [],
+                "groups": [],
+                "projects": [{ "granteeId": project_id, "read": true, "write": false }]
+            })),
+            Some(&admin_cookies),
+            Some(&admin_csrf),
+        ))
+        .await;
+    assert_eq!(access.status(), StatusCode::OK);
+
+    let client_id = machine["clientId"].as_str().unwrap();
+    let client_secret = access_token
+        .split('.')
+        .nth(2)
+        .and_then(|part| part.split(':').next())
+        .unwrap();
+    let bearer = fixture
+        .request(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/identity/connect/token")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(format!(
+                    "grant_type=client_credentials&scope=api.secrets&client_id={client_id}&client_secret={client_secret}"
+                )))
+                .unwrap(),
+        )
+        .await;
+    assert_eq!(bearer.status(), StatusCode::OK);
+    let bearer = response_json(bearer).await["access_token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    let sdk_projects = fixture
+        .request(
+            Request::builder()
+                .uri("/api/organizations/f4e44a7f-1190-432a-9d4a-af96013127cb/projects")
+                .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+    assert_eq!(sdk_projects.status(), StatusCode::OK);
+    let sdk_projects = response_json(sdk_projects).await;
+    assert_eq!(sdk_projects["data"].as_array().unwrap().len(), 1);
+    assert!(
+        sdk_projects["data"][0]["name"]
+            .as_str()
+            .unwrap()
+            .starts_with("2.")
+    );
+
+    let sdk_secrets = fixture
+        .request(
+            Request::builder()
+                .uri("/api/organizations/f4e44a7f-1190-432a-9d4a-af96013127cb/secrets")
+                .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+    assert_eq!(sdk_secrets.status(), StatusCode::OK);
+    let sdk_secrets = response_json(sdk_secrets).await;
+    assert_eq!(sdk_secrets["secrets"].as_array().unwrap().len(), 1);
+    assert!(
+        sdk_secrets["secrets"][0]["key"]
+            .as_str()
+            .unwrap()
+            .starts_with("2.")
+    );
+}
+
+#[tokio::test]
 async fn web_users_receive_group_and_direct_secret_permissions_without_admin_access() {
     let fixture = Fixture::new().await;
     let (member_cookies, member_csrf) = fixture.login("member").await;
@@ -144,6 +291,7 @@ async fn web_users_receive_group_and_direct_secret_permissions_without_admin_acc
     assert_eq!(unassigned.status(), StatusCode::CREATED);
     let unassigned = response_json(unassigned).await;
     assert_eq!(unassigned["projectId"], Value::Null);
+    assert_eq!(unassigned["sdkEncrypted"], true);
     let unassigned_id = unassigned["id"].as_str().unwrap();
     let unassigned_create_denied = fixture
         .request(json_request(

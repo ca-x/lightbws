@@ -1,7 +1,7 @@
 use rand::TryRng;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition, EntityTrait, IntoActiveModel,
-    ModelTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, TransactionTrait,
+    ModelTrait, PaginatorTrait, QueryFilter, QueryOrder, TransactionTrait,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -103,7 +103,7 @@ impl MachineRepository {
         .insert(&transaction)
         .await?;
         machine_access_token::ActiveModel {
-            id: Set(Uuid::new_v4().to_string()),
+            id: Set(UPSTREAM_CLIENT_ID.into()),
             machine_account_id: Set(account.id),
             name: Set("SDK compatibility".into()),
             secret_digest: Set(digest(UPSTREAM_CLIENT_SECRET)),
@@ -162,7 +162,7 @@ impl MachineRepository {
             }
         })?;
         machine_access_token::ActiveModel {
-            id: Set(Uuid::new_v4().to_string()),
+            id: Set(client_id.to_string()),
             machine_account_id: Set(model.id.clone()),
             name: Set("Default".into()),
             secret_digest: Set(digest(&secret)),
@@ -182,31 +182,50 @@ impl MachineRepository {
 
     pub async fn authenticate(
         &self,
-        client_id: &str,
+        access_token_id: &str,
         client_secret: &str,
     ) -> Result<AuthenticatedMachineCredential, AppError> {
-        let model = machine_account::Entity::find()
-            .filter(machine_account::Column::ClientId.eq(client_id))
+        let timestamp = now();
+        let candidate = digest(client_secret);
+        let active_token = || {
+            Condition::all()
+                .add(machine_access_token::Column::SecretDigest.eq(candidate.clone()))
+                .add(machine_access_token::Column::RevokedAt.is_null())
+                .add(
+                    Condition::any()
+                        .add(machine_access_token::Column::ExpiresAt.is_null())
+                        .add(machine_access_token::Column::ExpiresAt.gt(timestamp)),
+                )
+        };
+        let token = machine_access_token::Entity::find_by_id(access_token_id)
+            .filter(active_token())
             .one(self.db.connection())
-            .await?
-            .ok_or(AppError::Unauthorized)?;
+            .await?;
+        let (token, model) = if let Some(token) = token {
+            let model = machine_account::Entity::find_by_id(token.machine_account_id.clone())
+                .one(self.db.connection())
+                .await?
+                .ok_or(AppError::Unauthorized)?;
+            (token, model)
+        } else {
+            // Older databases used the machine client ID in every token. Keep accepting those
+            // records while all newly issued tokens use their own stable token ID.
+            let model = machine_account::Entity::find()
+                .filter(machine_account::Column::ClientId.eq(access_token_id))
+                .one(self.db.connection())
+                .await?
+                .ok_or(AppError::Unauthorized)?;
+            let token = machine_access_token::Entity::find()
+                .filter(machine_access_token::Column::MachineAccountId.eq(model.id.clone()))
+                .filter(active_token())
+                .one(self.db.connection())
+                .await?
+                .ok_or(AppError::Unauthorized)?;
+            (token, model)
+        };
         if model.revoked_at.is_some() {
             return Err(AppError::Unauthorized);
         }
-        let timestamp = now();
-        let candidate = digest(client_secret);
-        let token = machine_access_token::Entity::find()
-            .filter(machine_access_token::Column::MachineAccountId.eq(model.id.clone()))
-            .filter(machine_access_token::Column::SecretDigest.eq(candidate.clone()))
-            .filter(machine_access_token::Column::RevokedAt.is_null())
-            .filter(
-                Condition::any()
-                    .add(machine_access_token::Column::ExpiresAt.is_null())
-                    .add(machine_access_token::Column::ExpiresAt.gt(timestamp)),
-            )
-            .one(self.db.connection())
-            .await?
-            .ok_or(AppError::Unauthorized)?;
         if candidate
             .as_bytes()
             .ct_eq(token.secret_digest.as_bytes())
@@ -314,19 +333,6 @@ impl MachineRepository {
             .into_active_model();
         model.revoked_at = Set(revoked.then_some(now()));
         let model = model.update(&transaction).await?;
-        if revoked {
-            let token_ids = machine_access_token::Entity::find()
-                .select_only()
-                .column(machine_access_token::Column::Id)
-                .filter(machine_access_token::Column::MachineAccountId.eq(id.to_string()))
-                .into_tuple::<String>()
-                .all(&transaction)
-                .await?;
-            machine_session::Entity::delete_many()
-                .filter(machine_session::Column::MachineAccessTokenId.is_in(token_ids))
-                .exec(&transaction)
-                .await?;
-        }
         transaction.commit().await?;
         MachineAccount::try_from(model)
     }
@@ -364,7 +370,7 @@ impl MachineRepository {
         name: &str,
         expires_at: Option<i64>,
     ) -> Result<IssuedMachineAccessToken, AppError> {
-        let account = self.require_manageable(machine_id).await?;
+        self.require_manageable(machine_id).await?;
         let name = validate_name(name)?;
         let timestamp = now();
         if expires_at.is_some_and(|expires| expires <= timestamp) {
@@ -402,9 +408,10 @@ impl MachineRepository {
                 error.into()
             }
         })?;
+        let token = MachineAccessToken::try_from(model)?;
         Ok(IssuedMachineAccessToken {
-            token: MachineAccessToken::try_from(model)?,
-            access_token: format!("0.{}.{}:{SDK_ENCRYPTION_KEY}", account.client_id, secret),
+            access_token: format!("0.{}.{}:{SDK_ENCRYPTION_KEY}", token.id, secret),
+            token,
         })
     }
 

@@ -996,7 +996,6 @@ fn validate_secret_record(record: &SecretRecord) -> Result<(), AppError> {
         .project_id
         .as_deref()
         .is_some_and(|id| uuid::Uuid::parse_str(id).is_err())
-        || (record.key_cipher.is_some() && record.project_id.is_none())
         || record
             .key_plain
             .as_deref()

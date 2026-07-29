@@ -148,7 +148,6 @@ impl MigrationTrait for InitialMigration {
                             AND key_plain IS NULL AND value_plain IS NULL AND note_plain IS NULL)
                         OR (key_cipher IS NULL AND value_cipher IS NULL AND note_cipher IS NULL
                             AND key_plain IS NOT NULL AND value_plain IS NOT NULL AND note_plain IS NOT NULL)),
-                    CHECK(key_cipher IS NULL OR project_id IS NOT NULL),
                     CHECK(key_cipher IS NULL OR length(key_cipher) BETWEEN 1 AND 32768),
                     CHECK(value_cipher IS NULL OR length(value_cipher) BETWEEN 1 AND 2097152),
                     CHECK(note_cipher IS NULL OR length(note_cipher) <= 131072),

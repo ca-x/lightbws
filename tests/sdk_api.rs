@@ -12,6 +12,7 @@ use lightbws::{
     domain::{
         ORGANIZATION_ID,
         machines::{MachineRepository, UPSTREAM_CLIENT_ID, UPSTREAM_CLIENT_SECRET},
+        projects::ProjectRepository,
         users::{Role, UserRepository},
     },
 };
@@ -270,6 +271,69 @@ async fn sdk_access_policies_scope_regular_machines_and_support_direct_secret_ac
         .await;
     let synced = response_json(synced).await;
     assert_eq!(synced["secrets"]["data"].as_array().unwrap().len(), 2);
+
+    ProjectRepository::new(fixture.db.clone())
+        .purge(second_project)
+        .await
+        .expect("purge project without deleting its secrets");
+    let unassigned = fixture
+        .request(json_request(
+            Method::GET,
+            &format!("/api/secrets/{second_secret}"),
+            None,
+            Some(&scoped_bearer),
+        ))
+        .await;
+    assert_eq!(unassigned.status(), StatusCode::OK);
+    assert!(
+        response_json(unassigned).await["projects"]
+            .as_array()
+            .expect("secret projects")
+            .is_empty()
+    );
+
+    let identifiers = fixture
+        .request(json_request(
+            Method::GET,
+            &format!("/api/organizations/{ORGANIZATION_ID}/secrets"),
+            None,
+            Some(&scoped_bearer),
+        ))
+        .await;
+    let identifiers = response_json(identifiers).await;
+    let unassigned_identifier = identifiers["secrets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|secret| secret["id"] == second_secret.to_string())
+        .expect("unassigned secret remains listed");
+    assert!(
+        unassigned_identifier["projects"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    let updated_unassigned = fixture
+        .request(json_request(
+            Method::PUT,
+            &format!("/api/secrets/{second_secret}"),
+            Some(json!({
+                "key": "2.unassigned-updated",
+                "value": "2.unassigned-updated",
+                "note": "2.unassigned-updated",
+                "projectIds": null
+            })),
+            Some(&scoped_bearer),
+        ))
+        .await;
+    assert_eq!(updated_unassigned.status(), StatusCode::OK);
+    assert!(
+        response_json(updated_unassigned).await["projects"]
+            .as_array()
+            .expect("secret projects")
+            .is_empty()
+    );
 }
 
 async fn create_sdk_project(fixture: &Fixture, bearer: &str, name: &str) -> Uuid {
@@ -360,7 +424,7 @@ async fn sdk_rejects_invalid_bearer_and_persists_project_secret_round_trip() {
             Some(&bearer),
         ))
         .await;
-    assert_eq!(restored_old_token.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(restored_old_token.status(), StatusCode::OK);
     let bearer = fixture.bearer().await;
     let project = fixture
         .request(json_request(
@@ -393,7 +457,8 @@ async fn sdk_rejects_invalid_bearer_and_persists_project_secret_round_trip() {
     assert_eq!(secret.status(), StatusCode::CREATED);
     let secret = response_json(secret).await;
     assert_eq!(secret["key"], "2.key-ciphertext");
-    assert_eq!(secret["projectId"], project_id);
+    assert_eq!(secret["projects"][0]["id"], project_id);
+    assert!(secret.get("projectId").is_none());
     let secret_id = secret["id"].as_str().unwrap();
     let first_revision = secret["revisionDate"].as_str().unwrap().to_owned();
 

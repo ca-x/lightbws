@@ -16,6 +16,7 @@ use crate::{
     },
     domain::{machines::MachineAccount, next_sdk_revision, now, users::Role},
     error::AppError,
+    sdk_crypto,
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
@@ -544,10 +545,12 @@ impl AccessRepository {
                 .ok_or_else(|| AppError::internal(anyhow::anyhow!("grant project missing")))?;
             result.push(NamedGrant {
                 grantee_id: Uuid::parse_str(&project.id).map_err(AppError::internal)?,
-                name: project
-                    .name_plain
-                    .or(project.name_cipher)
-                    .unwrap_or_else(|| "Project".into()),
+                name: match (project.name_plain, project.name_cipher) {
+                    (Some(name), _) => name,
+                    (_, Some(cipher)) => sdk_crypto::decrypt(&cipher)
+                        .unwrap_or_else(|_| "Encrypted SDK project".into()),
+                    _ => "Project".into(),
+                },
                 read: grant.can_read,
                 write: grant.can_write,
             });

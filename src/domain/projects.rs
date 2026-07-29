@@ -12,6 +12,7 @@ use crate::{
     },
     domain::{ORGANIZATION_ID, access::Permission, next_sdk_revision, now},
     error::AppError,
+    sdk_crypto,
 };
 
 #[derive(Clone, Debug, Serialize)]
@@ -74,6 +75,12 @@ impl ProjectRepository {
         WebProject::try_from(model)
     }
 
+    pub async fn create_sdk(&self, name: &str) -> Result<WebProject, AppError> {
+        let name = validate_name(name)?;
+        let model = self.create_cipher(sdk_crypto::encrypt(&name)?).await?;
+        WebProject::try_from(model)
+    }
+
     pub async fn create_cipher(&self, name: String) -> Result<project::Model, AppError> {
         validate_cipher(&name)?;
         let timestamp = now();
@@ -110,6 +117,17 @@ impl ProjectRepository {
         let model = model.update(&transaction).await?;
         transaction.commit().await?;
         WebProject::try_from(model)
+    }
+
+    pub async fn update_web(&self, id: Uuid, name: &str) -> Result<WebProject, AppError> {
+        let existing = self.get(id).await?;
+        if existing.name_cipher.is_some() {
+            let name = validate_name(name)?;
+            let model = self.update_cipher(id, sdk_crypto::encrypt(&name)?).await?;
+            WebProject::try_from(model)
+        } else {
+            self.update_plain(id, name).await
+        }
     }
 
     pub async fn update_cipher(&self, id: Uuid, name: String) -> Result<project::Model, AppError> {
@@ -158,18 +176,29 @@ impl ProjectRepository {
 
     pub async fn purge(&self, id: Uuid) -> Result<(), AppError> {
         let transaction = self.db.connection().begin().await?;
-        secret::Entity::delete_many()
-            .filter(secret::Column::ProjectId.eq(id.to_string()))
-            .filter(secret::Column::KeyCipher.is_not_null())
-            .exec(&transaction)
-            .await?;
-        let result = project::Entity::delete_by_id(id.to_string())
-            .exec(&transaction)
-            .await?;
-        if result.rows_affected == 0 {
+        if project::Entity::find_by_id(id.to_string())
+            .one(&transaction)
+            .await?
+            .is_none()
+        {
             return Err(AppError::NotFound);
         }
-        next_sdk_revision(&transaction).await?;
+        let secrets = secret::Entity::find()
+            .filter(secret::Column::ProjectId.eq(id.to_string()))
+            .all(&transaction)
+            .await?;
+        let timestamp = now();
+        let revision_nanos = next_sdk_revision(&transaction).await?;
+        for model in secrets {
+            let mut active = model.into_active_model();
+            active.project_id = Set(None);
+            active.updated_at = Set(timestamp);
+            active.revision_nanos = Set(revision_nanos);
+            active.update(&transaction).await?;
+        }
+        project::Entity::delete_by_id(id.to_string())
+            .exec(&transaction)
+            .await?;
         transaction.commit().await?;
         Ok(())
     }
@@ -179,12 +208,17 @@ impl TryFrom<project::Model> for WebProject {
     type Error = AppError;
 
     fn try_from(value: project::Model) -> Result<Self, Self::Error> {
+        let sdk_encrypted = value.name_cipher.is_some();
         Ok(Self {
             id: Uuid::parse_str(&value.id).map_err(AppError::internal)?,
-            name: value
-                .name_plain
-                .unwrap_or_else(|| "Encrypted SDK project".into()),
-            sdk_encrypted: value.name_cipher.is_some(),
+            name: match (value.name_plain, value.name_cipher) {
+                (Some(name), _) => name,
+                (_, Some(cipher)) => {
+                    sdk_crypto::decrypt(&cipher).unwrap_or_else(|_| "Encrypted SDK project".into())
+                }
+                _ => return Err(AppError::internal(anyhow::anyhow!("project name missing"))),
+            },
+            sdk_encrypted,
             deleted_at: value.deleted_at,
             created_at: value.created_at,
             updated_at: value.updated_at,

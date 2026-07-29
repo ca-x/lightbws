@@ -15,4 +15,11 @@ describe("translations", () => {
     expect(`${messages.en.new} ${messages.en.user}`).toBe("New user")
     expect(messages.en.newBackupTarget).toBe("New backup target")
   })
+
+  it("describes Web-created projects as BWS-compatible", () => {
+    expect(messages.en.newProjectHint).toContain("BWS")
+    expect(messages["zh-CN"].newProjectHint).toContain("BWS")
+    expect(messages.en.helpAutomationIntro).toContain("created in Web")
+    expect(messages["zh-CN"].helpAutomationIntro).toContain("网页")
+  })
 })

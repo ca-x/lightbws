@@ -84,7 +84,7 @@ docker compose pull
 docker compose up -d
 ```
 
-如果部署需要固定版本，可在 `.env` 中设置 `LIGHTBWS_IMAGE=ghcr.io/ca-x/lightbws:0.2.2`。执行 `docker compose down` 会保留数据卷，执行 `docker compose down -v` 会永久删除数据卷。
+如果部署需要固定版本，可在 `.env` 中设置 `LIGHTBWS_IMAGE=ghcr.io/ca-x/lightbws:0.2.3`。执行 `docker compose down` 会保留数据卷，执行 `docker compose down -v` 会永久删除数据卷。
 
 ### 发布二进制
 
@@ -165,7 +165,7 @@ LightBWS 按照 Bitwarden Secrets Manager 的模型实现权限系统。系统�
 
 ## SDK 和 BWS
 
-LightBWS 实现官方 SDK 使用的 Secrets Manager 路由，并持久化客户端发送的密文。请在 Web 界面创建机器账号，复制一次性凭据，然后将客户端指向 LightBWS 基础地址。凭据交换会签发随机的一小时 Bearer 令牌，并将摘要写入 SQLite。每次 SDK 请求都会检查令牌是否过期，以及机器账号是否仍处于有效状态。
+LightBWS 实现官方 SDK 使用的 Secrets Manager 路由。网页新建项目和 Secret 默认都兼容 BWS，不需要选择网页或 SDK 类型。无项目 Secret 也按 Bitwarden 密文保存，通过直接授权机器账户即可在 BWS 使用；项目用于继承权限，并提供 fnox 所需的项目 ID。请在网页创建机器账户、复制一次性凭据、授予一个或多个项目或单个 Secret，再将客户端指向 LightBWS 基础地址。凭据交换会签发随机的一小时 Bearer 令牌，并将摘要写入 SQLite。每次 SDK 请求都会检查令牌是否过期，以及机器账户是否仍处于有效状态。
 
 正常部署应使用 Web 界面创建的机器账号。`LIGHTBWS_ENABLE_UPSTREAM_COMPATIBILITY_ACCOUNT` 只用于运行依赖公开固定客户端凭据的上游 SDK 测试夹具。它是测试兼容开关，不是生产认证模式。
 
@@ -186,11 +186,11 @@ cargo run --manifest-path demo/sdk-demo/Cargo.toml
 
 演示会完成认证，创建项目和密钥，读取并列出它们，然后删除测试数据。运行前需要先为机器账户授予至少一个项目的读写权限。
 
-SDK 创建的数据会以 Bitwarden 密文保存在 SQLite 中，并由 SDK 客户端解密。Web 创建的数据属于经过认证的 Web 信任边界，不会伪装成 SDK 密文响应。界面会明确标记 SDK 数据。
+无论通过网页还是 SDK 客户端创建，项目名称和项目内 Secret 都会以 Bitwarden 密文保存在 SQLite 中。网页会为已授权登录用户解密；BWS 与 SDK 客户端则在本地解密兼容接口的响应。已有的旧版网页专用项目仍可在网页编辑，但不会出现在 SDK 响应中。永久清除任何项目都只解除关联，不删除其中的 Secret，也不改变其存储格式。无项目的加密 Secret 可通过机器账户直接授权继续在 BWS 中使用；项目删除后，按项目 ID 配置的 fnox 不再适用。
 
 ### Fnox
 
-Fnox 的 Bitwarden Secrets Manager provider 会调用本机安装的 `bws` CLI。请先在 LightBWS 中创建项目和 SDK 密钥，再配置项目 ID 与密钥名称：
+Fnox 的 Bitwarden Secrets Manager provider 会调用本机安装的 `bws` CLI。请先在网页或 BWS 中创建项目和 Secret，为机器账户授权，再配置项目 ID 与 Secret 名称：
 
 ```toml
 [providers]
@@ -289,8 +289,8 @@ npm --prefix web audit
 
 ```bash
 git push origin main
-git tag -a v0.2.2 -m "LightBWS v0.2.2"
-git push origin v0.2.2
+git tag -a v0.2.3 -m "LightBWS v0.2.3"
+git push origin v0.2.3
 ```
 
 Docker 工作流会在 GitHub 原生 Runner 上分别构建 `linux/amd64` 和 `linux/arm64`，再将相同的多架构标签发布到 `ghcr.io/ca-x/lightbws` 和 `docker.io/czyt/lightbws`。仓库或组织需要提供 `DOCKERHUB_USERNAME` 和 `DOCKERHUB_TOKEN` 两个 secret。每个发布压缩包包含二进制、两种语言的 README 和许可证，并提供独立的 SHA-256 校验文件。前端文件已经嵌入二进制。

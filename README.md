@@ -84,7 +84,7 @@ docker compose pull
 docker compose up -d
 ```
 
-Set `LIGHTBWS_IMAGE=ghcr.io/ca-x/lightbws:0.2.2` in `.env` when a deployment must remain pinned to a specific release. Running `docker compose down` keeps the data volume; `docker compose down -v` permanently deletes it.
+Set `LIGHTBWS_IMAGE=ghcr.io/ca-x/lightbws:0.2.3` in `.env` when a deployment must remain pinned to a specific release. Running `docker compose down` keeps the data volume; `docker compose down -v` permanently deletes it.
 
 ### Release binary
 
@@ -143,7 +143,7 @@ Keep the key secret and back it up separately. Do not rotate or replace it witho
 
 ## Access model
 
-LightBWS follows the Bitwarden Secrets Manager model. It has one organization boundary and no personal secret space. Web-managed secrets may remain unassigned; SDK-encrypted secrets belong to a project.
+LightBWS follows the Bitwarden Secrets Manager model. It has one organization boundary and no personal secret space. Web-created Secrets may remain unassigned, and encrypted Secrets can also become unassigned when a project is permanently removed.
 
 | Entity | Purpose | Access |
 | --- | --- | --- |
@@ -165,7 +165,7 @@ Audit events contain actor, action, resource identifier, outcome, and timestamp 
 
 ## SDK and BWS
 
-LightBWS implements the Secrets Manager routes used by the official SDK and persists the ciphertext sent by the client. Create a machine account in the Web UI, copy its one-time credential, and point the client at the LightBWS base URL. Credential exchange issues a random one-hour bearer token whose digest is stored in SQLite. Every SDK request checks expiry and the machine account's current revocation state.
+LightBWS implements the Secrets Manager routes used by the official SDK. New Web projects and Secrets are BWS-compatible by default, with no Web/SDK type choice. Unassigned Secrets are also stored as Bitwarden ciphertext and can be used by BWS through direct machine grants; projects add inherited access and the project ID required by fnox. Create a machine account in the Web UI, copy its one-time credential, grant it one or more projects or individual Secrets, and point the client at the LightBWS base URL. Credential exchange issues a random one-hour bearer token whose digest is stored in SQLite. Every SDK request checks expiry and the machine account's current revocation state.
 
 Normal deployments must use machine accounts created in the Web UI. `LIGHTBWS_ENABLE_UPSTREAM_COMPATIBILITY_ACCOUNT` exists only for upstream SDK fixtures that expect publicly known fixed client credentials. It is a test compatibility switch, not a production authentication mode.
 
@@ -186,11 +186,11 @@ cargo run --manifest-path demo/sdk-demo/Cargo.toml
 
 The acceptance demo authenticates, creates a project and secret, reads and lists them, then removes the test records. The machine account must already have read/write access to at least one project.
 
-SDK-created values remain Bitwarden ciphertext in SQLite and are decrypted by the SDK client. Web-created values use the authenticated Web trust boundary and are intentionally not exposed through SDK ciphertext responses. The UI labels SDK-owned records accordingly.
+Project names and Secrets created through either Web or an SDK client remain Bitwarden ciphertext in SQLite. Web decrypts them for authorized signed-in users, while BWS and SDK clients decrypt the compatible API responses locally. Existing legacy Web-only projects remain editable in Web but are intentionally omitted from SDK responses. Permanently purging any project clears the association without deleting its Secrets or changing their storage format. An unassigned encrypted Secret remains available to BWS through a direct machine grant; project-scoped fnox configuration no longer applies after the project is removed.
 
 ### Fnox
 
-Fnox uses the installed `bws` CLI for its Bitwarden Secrets Manager provider. Create a project and an SDK-owned secret in LightBWS first, then configure the project ID and secret name:
+Fnox uses the installed `bws` CLI for its Bitwarden Secrets Manager provider. Create a project and Secret in Web or BWS, grant the machine account access, then configure the project ID and Secret key:
 
 ```toml
 [providers]
@@ -289,8 +289,8 @@ After CI succeeds on `main`, pushing a semantic `vX.Y.Z` tag starts two release 
 
 ```bash
 git push origin main
-git tag -a v0.2.2 -m "LightBWS v0.2.2"
-git push origin v0.2.2
+git tag -a v0.2.3 -m "LightBWS v0.2.3"
+git push origin v0.2.3
 ```
 
 The Docker workflow builds `linux/amd64` and `linux/arm64` on native GitHub runners, then publishes the same multi-platform tags to `ghcr.io/ca-x/lightbws` and `docker.io/czyt/lightbws`. Repository or organization secrets named `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` are required. Each release archive contains the binary, both language READMEs, and the license, with a companion SHA-256 checksum asset. Frontend files are already embedded in the binary.
