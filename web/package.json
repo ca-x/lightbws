@@ -1,6 +1,6 @@
 {
   "name": "lightbws-web",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "type": "module",
   "packageManager": "npm@12.0.1",
@@ -19,9 +19,11 @@
     "@astryxdesign/theme-neutral": "0.1.8",
     "@astryxdesign/theme-stone": "0.1.8",
     "@astryxdesign/theme-y2k": "0.1.8",
+    "@floating-ui/react-dom": "^2.1.9",
     "lucide-react": "1.27.0",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "react-tourlight": "^0.3.0"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "7.0.0",

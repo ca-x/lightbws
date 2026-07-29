@@ -1,15 +1,16 @@
 import { Banner } from "@astryxdesign/core/Banner"
 import { Button } from "@astryxdesign/core/Button"
 import { Card } from "@astryxdesign/core/Card"
-import { IconButton } from "@astryxdesign/core/IconButton"
+import { IconButton as BaseIconButton } from "@astryxdesign/core/IconButton"
 import { Tooltip } from "@astryxdesign/core/Tooltip"
+import { SpotlightTour, useSpotlight, type SpotlightStep } from "react-tourlight"
 import {
-  ArchiveRestore, Boxes, Check, ChevronRight, CircleGauge, Clock3, CloudUpload, Copy, DatabaseBackup,
+  ArchiveRestore, BookOpen, Boxes, Check, ChevronRight, CircleGauge, Clock3, CloudUpload, Copy, DatabaseBackup,
   ExternalLink, FileDown, FileUp, FolderKanban, Globe2, Info, KeyRound, Languages, LogOut, Menu,
   Monitor, Moon, Network, Pencil, Plus, RefreshCw, ScrollText, Search, ServerCog, Settings, ShieldCheck,
   Sun, Trash2, UserCog, UsersRound, X,
 } from "lucide-react"
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps, type FormEvent, type ReactNode } from "react"
 
 import { ApiError, api } from "./api"
 import type {
@@ -23,7 +24,7 @@ import type { AstryxThemeName } from "../theme/astryxThemes"
 import { ThemePicker } from "../theme/ThemePicker"
 import { useTheme } from "../theme/ThemeProvider"
 
-type Page = "dashboard" | "projects" | "secrets" | "machines" | "users" | "groups" | "audit" | "trash" | "integrations" | "backups" | "transfer" | "settings"
+type Page = "dashboard" | "projects" | "secrets" | "machines" | "users" | "groups" | "audit" | "trash" | "integrations" | "help" | "backups" | "transfer" | "settings"
 type Notice = { text: string; error?: boolean } | null
 const adminPages = new Set<Page>(["machines", "users", "groups", "audit", "backups", "transfer"])
 type AccessResource = { kind: "project" | "secret" | "machine"; id: string; name: string }
@@ -31,6 +32,11 @@ type GrantBucketKey = "users" | "groups" | "machines" | "projects"
 type GrantLevel = "none" | "read" | "write"
 type GrantBuckets<T> = Record<GrantBucketKey, T[]>
 type AccessSection = { key: GrantBucketKey; label: string; items: Array<{ id: string; name: string; detail?: string }> }
+
+type IconButtonProps = ComponentProps<typeof BaseIconButton>
+function IconButton({ label, tooltip = label, ...props }: IconButtonProps) {
+  return <BaseIconButton {...props} label={label} tooltip={tooltip} />
+}
 
 export function App() {
   const [session, setSession] = useState<Session | null>(null)
@@ -143,11 +149,11 @@ function Workspace({ session, onSignedOut }: { session: Session; onSignedOut: ()
     const timer = setTimeout(() => setNotice(null), 5000)
     return () => clearTimeout(timer)
   }, [notice])
-  function navigate(next: Page) {
+  const navigate = useCallback((next: Page) => {
     location.hash = next
     setPage(next)
     setMobileOpen(false)
-  }
+  }, [])
   async function logout() {
     await api.logout().catch(() => undefined)
     onSignedOut()
@@ -156,6 +162,7 @@ function Workspace({ session, onSignedOut }: { session: Session; onSignedOut: ()
 
   return (
     <div className="workspace">
+      <WorkspaceTour onNavigate={navigate} />
       <aside className="sidebar" data-open={mobileOpen}>
         <div className="sidebar-head"><Brand /><IconButton className="mobile-only" variant="ghost" label={t("mobileClose")} icon={<X />} onClick={() => setMobileOpen(false)} /></div>
         <nav aria-label={t("menu")}>
@@ -168,6 +175,7 @@ function Workspace({ session, onSignedOut }: { session: Session; onSignedOut: ()
           {isAdmin && <NavItem page="audit" current={page} icon={<ShieldCheck />} label={t("auditLog")} onClick={navigate} />}
           <NavItem page="trash" current={page} icon={<Trash2 />} label={t("trash")} onClick={navigate} />
           <NavItem page="integrations" current={page} icon={<Network />} label={t("integrations")} onClick={navigate} />
+          <NavItem page="help" current={page} icon={<BookOpen />} label={t("help")} onClick={navigate} />
           {isAdmin && <div className="nav-separator" />}
           {isAdmin && <NavItem page="backups" current={page} icon={<DatabaseBackup />} label={t("backups")} onClick={navigate} />}
           {isAdmin && <NavItem page="transfer" current={page} icon={<ArchiveRestore />} label={t("transfer")} onClick={navigate} />}
@@ -182,15 +190,16 @@ function Workspace({ session, onSignedOut }: { session: Session; onSignedOut: ()
       {mobileOpen && <button className="sidebar-scrim" aria-label={t("mobileClose")} onClick={() => setMobileOpen(false)} />}
       <main className="main-canvas">
         <div className="mobile-bar"><IconButton variant="ghost" label={t("menu")} icon={<Menu />} onClick={() => setMobileOpen(true)} /><Brand compact /></div>
-        {page === "dashboard" && <DashboardPage {...pageProps} />}
+        {page === "dashboard" && <DashboardPage onNavigate={navigate} {...pageProps} />}
         {page === "projects" && <ProjectsPage isAdmin={isAdmin} {...pageProps} />}
         {page === "secrets" && <SecretsPage isAdmin={isAdmin} {...pageProps} />}
         {page === "machines" && isAdmin && <MachinesPage {...pageProps} />}
         {page === "users" && isAdmin && <UsersPage currentUser={session.user} {...pageProps} />}
-        {page === "groups" && isAdmin && <GroupsPage {...pageProps} />}
+        {page === "groups" && isAdmin && <GroupsPage onNavigate={navigate} {...pageProps} />}
         {page === "audit" && isAdmin && <AuditPage {...pageProps} />}
         {page === "trash" && <TrashPage isAdmin={isAdmin} {...pageProps} />}
-        {page === "integrations" && <IntegrationsPage />}
+        {page === "integrations" && <IntegrationsPage {...pageProps} />}
+        {page === "help" && <HelpPage {...pageProps} />}
         {page === "backups" && isAdmin && <BackupsPage {...pageProps} />}
         {page === "transfer" && isAdmin && <TransferPage {...pageProps} />}
         {page === "settings" && <SettingsPage />}
@@ -198,6 +207,22 @@ function Workspace({ session, onSignedOut }: { session: Session; onSignedOut: ()
       {notice && <div className="toast" data-error={notice.error || undefined} role={notice.error ? "alert" : "status"}>{notice.error ? <X /> : <Check />}<span>{notice.text}</span></div>}
     </div>
   )
+}
+
+function WorkspaceTour({ onNavigate }: { onNavigate: (page: Page) => void }) {
+  const { t } = useI18n()
+  const finish = useCallback(() => {
+    try { localStorage.setItem("lightbws-onboarding-v1", "done") } catch { /* storage may be blocked */ }
+    onNavigate("dashboard")
+  }, [onNavigate])
+  const steps = useMemo<SpotlightStep[]>(() => [
+    { target: "#tour-dashboard-header", route: "#dashboard", title: t("tourWelcomeTitle"), content: t("tourWelcomeText"), placement: "bottom" },
+    { target: "#tour-service-endpoint", route: "#dashboard", title: t("tourEndpointTitle"), content: t("tourEndpointText"), placement: "bottom" },
+    { target: "#tour-new-secret", route: "#secrets", title: t("tourSecretTitle"), content: t("tourSecretText"), placement: "bottom" },
+    { target: "#tour-new-machine", route: "#machines", title: t("tourMachineTitle"), content: t("tourMachineText"), placement: "bottom" },
+    { target: "#tour-new-user", route: "#users", title: t("tourUsersTitle"), content: t("tourUsersText"), placement: "bottom" },
+  ], [t])
+  return <SpotlightTour id="workspace-onboarding" onComplete={finish} onSkip={finish} steps={steps} />
 }
 
 function BrandMark() {
@@ -216,11 +241,27 @@ function PageHeader({ title, description, action }: { title: string; description
   return <header className="page-header"><div><h1>{title}</h1>{description && <p>{description}</p>}</div>{action}</header>
 }
 
-function DashboardPage({ notify }: { notify: (text: string, error?: boolean) => void }) {
+function DashboardPage({ notify, onNavigate }: { notify: (text: string, error?: boolean) => void; onNavigate: (page: Page) => void }) {
   const { t } = useI18n()
+  const { start } = useSpotlight()
   const [overview, setOverview] = useState<Overview | null>(null)
+  const started = useRef(false)
   useEffect(() => { api.overview().then(setOverview).catch(() => notify(t("genericError"), true)) }, [notify, t])
-  return <div className="page"><PageHeader title={t("dashboard")} description={t("appTagline")} />
+  const needsOnboarding = overview?.secrets === 0
+  useEffect(() => {
+    if (!needsOnboarding || started.current) return
+    try { if (localStorage.getItem("lightbws-onboarding-v1") === "done") return } catch { /* storage may be blocked */ }
+    started.current = true
+    const timer = setTimeout(() => start("workspace-onboarding"), 250)
+    return () => clearTimeout(timer)
+  }, [needsOnboarding, start])
+  return <div className="page"><div id="tour-dashboard-header"><PageHeader title={t("dashboard")} description={t("appTagline")} /></div>
+    {needsOnboarding && <section className="getting-started" id="tour-getting-started">
+      <div className="getting-started-copy" id="tour-getting-started-copy"><span className="step-number">01</span><div><h2>{t("gettingStartedTitle")}</h2><p>{t("gettingStartedText")}</p></div></div>
+      <div className="getting-started-actions"><Button variant="primary" icon={<KeyRound />} label={t("createFirstSecret")} onClick={() => onNavigate("secrets")} /><Button variant="ghost" label={t("startTour")} onClick={() => start("workspace-onboarding")} /></div>
+      <ServiceEndpoint notify={notify} id="tour-service-endpoint" />
+      <ol className="quick-path"><li><strong>{t("quickSecretTitle")}</strong><span>{t("quickSecretText")}</span></li><li><strong>{t("quickProjectTitle")}</strong><span>{t("quickProjectText")}</span></li><li><strong>{t("quickAccessTitle")}</strong><span>{t("quickAccessText")}</span></li></ol>
+    </section>}
     <section className="metric-grid">
       <Metric icon={<FolderKanban />} label={t("projectsCount")} value={overview?.projects} />
       <Metric icon={<KeyRound />} label={t("secretsCount")} value={overview?.secrets} />
@@ -287,11 +328,11 @@ function SecretsPage({ isAdmin, notify }: { isAdmin: boolean; notify: (text: str
   }
   async function remove(item: Secret) { try { await api.trashSecret(item.id); await load() } catch { notify(t("genericError"), true) } }
   async function copy(value: string) { await navigator.clipboard.writeText(value); notify(t("copied")) }
-  return <div className="page"><PageHeader title={t("secrets")} action={canCreate ? <Button variant="primary" icon={<Plus />} label={`${t("new")} ${t("secret")}`} onClick={() => setEditing("new")} /> : undefined} />
+  return <div className="page"><PageHeader title={t("secrets")} description={t("secretsIntro")} action={canCreate ? <span id="tour-new-secret"><Button variant="primary" icon={<Plus />} label={`${t("new")} ${t("secret")}`} onClick={() => setEditing("new")} /></span> : undefined} />
     <ListToolbar query={query} onQuery={setQuery} />
-    <DataPanel empty={!filtered.length} onEmptyAction={canCreate ? () => setEditing("new") : undefined}>
+    <DataPanel empty={!filtered.length} emptyIcon={<KeyRound />} emptyTitle={t("emptySecretsTitle")} emptyDescription={t("emptySecretsText")} emptyActionLabel={t("createFirstSecret")} onEmptyAction={canCreate ? () => setEditing("new") : undefined}>
       <table><thead><tr><th>{t("secretKey")}</th><th>{t("secretValue")}</th><th>{t("project")}</th><th>{t("permission")}</th><th>{t("lastUpdated")}</th><th className="action-column">{t("actions")}</th></tr></thead>
-        <tbody>{filtered.map((item) => <tr key={item.id}><td><div className="title-cell"><span className="row-icon"><KeyRound /></span><div><strong>{item.key}</strong>{item.sdkEncrypted && <small>{t("encryptedSdk")}</small>}</div></div></td><td><code className="secret-value">{item.value === null ? "••••••••" : revealed.has(item.id) ? item.value : "••••••••••••"}</code></td><td>{projects.find((project) => project.id === item.projectId)?.name || t("noProject")}</td><td><StatusPill value={item.permissions.write ? "readWrite" : "readOnly"} /></td><td>{formatDate(item.updatedAt)}</td><td><RowActions>{item.value !== null && <IconButton variant="ghost" label={t("secretValue")} icon={<KeyRound />} onClick={() => setRevealed((current) => { const next = new Set(current); next.has(item.id) ? next.delete(item.id) : next.add(item.id); return next })} />}{item.value !== null && <IconButton variant="ghost" label={t("copy")} icon={<Copy />} onClick={() => void copy(item.value || "")} />}{isAdmin && <IconButton variant="ghost" label={t("manageAccess")} icon={<ShieldCheck />} onClick={() => setAccessItem(item)} />}{!item.sdkEncrypted && item.permissions.write && <IconButton variant="ghost" label={t("edit")} icon={<Pencil />} onClick={() => setEditing(item)} />}{item.permissions.write && <IconButton variant="ghost" label={t("delete")} icon={<Trash2 />} onClick={() => void remove(item)} />}</RowActions></td></tr>)}</tbody>
+        <tbody>{filtered.map((item) => { const isRevealed = revealed.has(item.id); return <tr key={item.id}><td><div className="title-cell"><span className="row-icon"><KeyRound /></span><div className="copyable-cell"><strong>{item.key}</strong>{item.sdkEncrypted && <small>{t("encryptedSdk")}</small>}</div><IconButton variant="ghost" label={t("copySecretKey")} icon={<Copy />} onClick={() => void copy(item.key)} /></div></td><td><div className="copyable-value"><code className="secret-value">{item.value === null ? "••••••••" : isRevealed ? item.value : "••••••••••••"}</code>{item.value !== null && <IconButton variant="ghost" label={t("copySecretValue")} icon={<Copy />} onClick={() => void copy(item.value || "")} />}</div></td><td>{projects.find((project) => project.id === item.projectId)?.name || t("noProject")}</td><td><StatusPill value={item.permissions.write ? "readWrite" : "readOnly"} /></td><td>{formatDate(item.updatedAt)}</td><td><RowActions>{item.value !== null && <IconButton variant="ghost" label={t(isRevealed ? "hideSecretValue" : "revealSecretValue")} icon={<KeyRound />} onClick={() => setRevealed((current) => { const next = new Set(current); next.has(item.id) ? next.delete(item.id) : next.add(item.id); return next })} />}{isAdmin && <IconButton variant="ghost" label={t("manageAccess")} icon={<ShieldCheck />} onClick={() => setAccessItem(item)} />}{!item.sdkEncrypted && item.permissions.write && <IconButton variant="ghost" label={t("edit")} icon={<Pencil />} onClick={() => setEditing(item)} />}{item.permissions.write && <IconButton variant="ghost" label={t("delete")} icon={<Trash2 />} onClick={() => void remove(item)} />}</RowActions></td></tr> })}</tbody>
       </table>
     </DataPanel>
     {editing && <SecretDialog item={editing === "new" ? null : editing} projects={projects} allowUnassigned={isAdmin || (editing !== "new" && editing.projectId === null)} onClose={() => setEditing(null)} onSave={save} />}
@@ -312,7 +353,7 @@ function MachinesPage({ notify }: { notify: (text: string, error?: boolean) => v
   async function create(name: string) { try { const value = await api.createMachine(name); setCreating(false); setIssued(value); load() } catch { notify(t("genericError"), true) } }
   async function toggle(item: MachineAccount) { try { await api.setMachineRevoked(item.id, !item.revokedAt); load() } catch { notify(t("genericError"), true) } }
   async function remove(item: MachineAccount) { try { await api.deleteMachine(item.id); load() } catch { notify(t("genericError"), true) } }
-  return <div className="page"><PageHeader title={t("machines")} action={<Button variant="primary" icon={<Plus />} label={`${t("new")} ${t("machineAccount")}`} onClick={() => setCreating(true)} />} /><DataPanel empty={!items.length} onEmptyAction={() => setCreating(true)}><table><thead><tr><th>{t("machineName")}</th><th>{t("clientId")}</th><th>{t("lastUsed")}</th><th>{t("status")}</th><th className="action-column">{t("actions")}</th></tr></thead><tbody>{items.map((item) => <tr key={item.id}><td><div className="title-cell"><span className="row-icon"><ServerCog /></span><div><strong>{item.name}</strong>{item.compatibilityAccount && <small>{t("compatibilityAccount")}</small>}</div></div></td><td><code>{item.clientId}</code></td><td>{item.lastUsedAt ? formatDate(item.lastUsedAt) : t("never")}</td><td><StatusPill value={item.revokedAt ? "revoked" : "active"} /></td><td><RowActions>{!item.compatibilityAccount && <IconButton variant="ghost" label={t("credentialsAndEvents")} icon={<KeyRound />} onClick={() => setOperationsItem(item)} />}{!item.compatibilityAccount && <IconButton variant="ghost" label={t("manageAccess")} icon={<ShieldCheck />} onClick={() => setAccessItem(item)} />}<Button size="sm" variant="ghost" label={item.revokedAt ? t("enable") : t("revoke")} onClick={() => void toggle(item)} />{!item.compatibilityAccount && <IconButton variant="ghost" label={t("delete")} icon={<Trash2 />} onClick={() => void remove(item)} />}</RowActions></td></tr>)}</tbody></table></DataPanel>{creating && <NameDialog title={`${t("new")} ${t("machineAccount")}`} label={t("machineName")} onClose={() => setCreating(false)} onSave={create} />}{issued && <TokenDialog item={issued} onClose={() => setIssued(null)} notify={notify} />}{accessItem && <ResourceAccessDialog resource={{ kind: "machine", id: accessItem.id, name: accessItem.name }} onClose={() => setAccessItem(null)} notify={notify} />}{operationsItem && <MachineOperationsDialog machine={operationsItem} onClose={() => setOperationsItem(null)} notify={notify} />}</div>
+  return <div className="page"><PageHeader title={t("machines")} action={<span id="tour-new-machine"><Button variant="primary" icon={<Plus />} label={`${t("new")} ${t("machineAccount")}`} onClick={() => setCreating(true)} /></span>} /><DataPanel empty={!items.length} onEmptyAction={() => setCreating(true)}><table><thead><tr><th>{t("machineName")}</th><th>{t("clientId")}</th><th>{t("lastUsed")}</th><th>{t("status")}</th><th className="action-column">{t("actions")}</th></tr></thead><tbody>{items.map((item) => <tr key={item.id}><td><div className="title-cell"><span className="row-icon"><ServerCog /></span><div><strong>{item.name}</strong>{item.compatibilityAccount && <small>{t("compatibilityAccount")}</small>}</div></div></td><td><code>{item.clientId}</code></td><td>{item.lastUsedAt ? formatDate(item.lastUsedAt) : t("never")}</td><td><StatusPill value={item.revokedAt ? "revoked" : "active"} /></td><td><RowActions>{!item.compatibilityAccount && <IconButton variant="ghost" label={t("credentialsAndEvents")} icon={<KeyRound />} onClick={() => setOperationsItem(item)} />}{!item.compatibilityAccount && <IconButton variant="ghost" label={t("manageAccess")} icon={<ShieldCheck />} onClick={() => setAccessItem(item)} />}<Button size="sm" variant="ghost" label={item.revokedAt ? t("enable") : t("revoke")} onClick={() => void toggle(item)} />{!item.compatibilityAccount && <IconButton variant="ghost" label={t("delete")} icon={<Trash2 />} onClick={() => void remove(item)} />}</RowActions></td></tr>)}</tbody></table></DataPanel>{creating && <NameDialog title={`${t("new")} ${t("machineAccount")}`} label={t("machineName")} onClose={() => setCreating(false)} onSave={create} />}{issued && <TokenDialog item={issued} onClose={() => setIssued(null)} notify={notify} />}{accessItem && <ResourceAccessDialog resource={{ kind: "machine", id: accessItem.id, name: accessItem.name }} onClose={() => setAccessItem(null)} notify={notify} />}{operationsItem && <MachineOperationsDialog machine={operationsItem} onClose={() => setOperationsItem(null)} notify={notify} />}</div>
 }
 
 function TokenDialog({ item, onClose, notify }: { item: IssuedMachineAccount | IssuedMachineAccessToken; onClose: () => void; notify: (text: string) => void }) {
@@ -384,7 +425,7 @@ function UsersPage({ currentUser, notify }: { currentUser: User; notify: (text: 
   const load = useCallback(() => api.users().then(setItems).catch(() => notify(t("genericError"), true)), [notify, t]); useEffect(() => { void load() }, [load])
   async function save(input: { username: string; displayName: string; role: Role; password: string; disabled: boolean }) { try { editing === "new" ? await api.createUser(input) : editing && await api.updateUser(editing.id, input); setEditing(null); load() } catch { notify(t("genericError"), true) } }
   async function password(value: string) { if (!passwordUser) return; try { await api.resetPassword(passwordUser.id, value); setPasswordUser(null); notify(t("save")); } catch { notify(t("genericError"), true) } }
-  return <div className="page"><PageHeader title={t("users")} action={<Button variant="primary" icon={<Plus />} label={`${t("new")} ${t("user")}`} onClick={() => setEditing("new")} />} /><DataPanel empty={!items.length} onEmptyAction={() => setEditing("new")}><table><thead><tr><th>{t("displayName")}</th><th>{t("username")}</th><th>{t("role")}</th><th>{t("status")}</th><th className="action-column">{t("actions")}</th></tr></thead><tbody>{items.map((item) => <tr key={item.id}><td><div className="title-cell"><span className="avatar small">{item.displayName.slice(0, 2).toUpperCase()}</span><strong>{item.displayName}</strong></div></td><td>{item.username}</td><td>{item.role === "admin" ? t("administrator") : t("member")}</td><td><StatusPill value={item.disabled ? "disabled" : "active"} /></td><td><RowActions><IconButton variant="ghost" label={t("edit")} icon={<UserCog />} onClick={() => setEditing(item)} /><Button size="sm" variant="ghost" label={t("resetPassword")} onClick={() => setPasswordUser(item)} /></RowActions></td></tr>)}</tbody></table></DataPanel>{editing && <UserDialog item={editing === "new" ? null : editing} currentUser={currentUser} onClose={() => setEditing(null)} onSave={save} />}{passwordUser && <NameDialog title={t("resetPassword")} label={t("newPassword")} type="password" onClose={() => setPasswordUser(null)} onSave={password} />}</div>
+  return <div className="page"><PageHeader title={t("users")} description={t("usersIntro")} action={<span id="tour-new-user"><Button variant="primary" icon={<Plus />} label={`${t("new")} ${t("user")}`} onClick={() => setEditing("new")} /></span>} /><DataPanel empty={!items.length} emptyIcon={<UsersRound />} emptyTitle={t("emptyUsersTitle")} emptyDescription={t("emptyUsersText")} emptyActionLabel={`${t("new")} ${t("user")}`} onEmptyAction={() => setEditing("new")}><table><thead><tr><th>{t("displayName")}</th><th>{t("username")}</th><th>{t("role")}</th><th>{t("status")}</th><th className="action-column">{t("actions")}</th></tr></thead><tbody>{items.map((item) => <tr key={item.id}><td><div className="title-cell"><span className="avatar small">{item.displayName.slice(0, 2).toUpperCase()}</span><div><strong>{item.displayName}</strong>{item.id === currentUser.id && <small>{t("currentUser")}</small>}</div></div></td><td>{item.username}</td><td>{item.role === "admin" ? t("administrator") : t("member")}</td><td><StatusPill value={item.disabled ? "disabled" : "active"} /></td><td><RowActions><IconButton variant="ghost" label={t("edit")} icon={<UserCog />} onClick={() => setEditing(item)} /><Button size="sm" variant="ghost" label={t("resetPassword")} onClick={() => setPasswordUser(item)} /></RowActions></td></tr>)}</tbody></table></DataPanel>{editing && <UserDialog item={editing === "new" ? null : editing} currentUser={currentUser} onClose={() => setEditing(null)} onSave={save} />}{passwordUser && <NameDialog title={t("resetPassword")} label={t("newPassword")} type="password" onClose={() => setPasswordUser(null)} onSave={password} />}</div>
 }
 
 function UserDialog({ item, currentUser, onClose, onSave }: { item: User | null; currentUser: User; onClose: () => void; onSave: (input: { username: string; displayName: string; role: Role; password: string; disabled: boolean }) => Promise<void> }) {
@@ -393,7 +434,7 @@ function UserDialog({ item, currentUser, onClose, onSave }: { item: User | null;
   return <Modal title={`${item ? t("edit") : t("new")} ${t("user")}`} onClose={onClose}><form className="form-stack" onSubmit={submit}><Field label={t("username")} value={username} onChange={setUsername} disabled={Boolean(item)} autoFocus /><Field label={t("displayName")} value={displayName} onChange={setDisplayName} />{!item && <Field label={t("password")} value={password} onChange={setPassword} type="password" />}<SelectField label={t("role")} value={role} onChange={(value) => setRole(value as Role)} disabled={self} options={[{ value: "user", label: t("member") }, { value: "admin", label: t("administrator") }]} />{item && <CheckField label={t("disabled")} checked={disabled} onChange={setDisabled} disabled={self} />}<DialogActions onClose={onClose} busy={busy} disabled={!username.trim() || !displayName.trim() || (!item && password.length < 6)} /></form></Modal>
 }
 
-function GroupsPage({ notify }: { notify: (text: string, error?: boolean) => void }) {
+function GroupsPage({ notify, onNavigate }: { notify: (text: string, error?: boolean) => void; onNavigate: (page: Page) => void }) {
   const { t } = useI18n()
   const [groups, setGroups] = useState<Group[]>([])
   const [users, setUsers] = useState<User[]>([])
@@ -404,7 +445,9 @@ function GroupsPage({ notify }: { notify: (text: string, error?: boolean) => voi
   async function save(name: string) { try { editing === "new" ? await api.createGroup(name) : editing && await api.updateGroup(editing.id, name); setEditing(null); await load() } catch { notify(t("genericError"), true) } }
   async function remove(group: Group) { if (!confirm(t("confirmDeleteGroup"))) return; try { await api.deleteGroup(group.id); await load() } catch { notify(t("genericError"), true) } }
   async function saveMembers(memberIds: string[]) { if (!membersGroup) return; try { await api.replaceGroupMembers(membersGroup.id, memberIds); setMembersGroup(null); notify(t("groupMembersSaved")); await load() } catch { notify(t("genericError"), true) } }
-  return <div className="page"><PageHeader title={t("groups")} description={t("groupsIntro")} action={<Button variant="primary" icon={<Plus />} label={`${t("new")} ${t("group")}`} onClick={() => setEditing("new")} />} /><DataPanel empty={!groups.length} onEmptyAction={() => setEditing("new")}><table><thead><tr><th>{t("groupName")}</th><th>{t("members")}</th><th>{t("lastUpdated")}</th><th className="action-column">{t("actions")}</th></tr></thead><tbody>{groups.map((group) => <tr key={group.id}><td><div className="title-cell"><span className="row-icon"><Boxes /></span><strong>{group.name}</strong></div></td><td>{group.memberIds.length}</td><td>{formatDate(group.updatedAt)}</td><td><RowActions><Button size="sm" variant="ghost" label={t("manageMembers")} onClick={() => setMembersGroup(group)} /><IconButton variant="ghost" label={t("edit")} icon={<Pencil />} onClick={() => setEditing(group)} /><IconButton variant="ghost" label={t("delete")} icon={<Trash2 />} onClick={() => void remove(group)} /></RowActions></td></tr>)}</tbody></table></DataPanel>{editing && <NameDialog title={`${editing === "new" ? t("new") : t("edit")} ${t("group")}`} label={t("groupName")} initialValue={editing === "new" ? "" : editing.name} onClose={() => setEditing(null)} onSave={save} />}{membersGroup && <GroupMembersDialog group={membersGroup} users={users} onClose={() => setMembersGroup(null)} onSave={saveMembers} />}</div>
+  const needsMoreUsers = users.length <= 1 && groups.length === 0
+  const emptyAction = needsMoreUsers ? () => onNavigate("users") : () => setEditing("new")
+  return <div className="page"><PageHeader title={t("groups")} description={t("groupsIntro")} action={needsMoreUsers ? <Button variant="primary" icon={<Plus />} label={`${t("new")} ${t("user")}`} onClick={() => onNavigate("users")} /> : <Button variant="primary" icon={<Plus />} label={`${t("new")} ${t("group")}`} onClick={() => setEditing("new")} />} /><DataPanel empty={!groups.length} emptyIcon={<Boxes />} emptyTitle={t(needsMoreUsers ? "groupsNeedUsersTitle" : "emptyGroupsTitle")} emptyDescription={t(needsMoreUsers ? "groupsNeedUsersText" : "emptyGroupsText")} emptyActionLabel={t(needsMoreUsers ? "addUserFirst" : "createGroup")} onEmptyAction={emptyAction}><table><thead><tr><th>{t("groupName")}</th><th>{t("members")}</th><th>{t("lastUpdated")}</th><th className="action-column">{t("actions")}</th></tr></thead><tbody>{groups.map((group) => <tr key={group.id}><td><div className="title-cell"><span className="row-icon"><Boxes /></span><strong>{group.name}</strong></div></td><td>{group.memberIds.length}</td><td>{formatDate(group.updatedAt)}</td><td><RowActions><Button size="sm" variant="ghost" label={t("manageMembers")} onClick={() => setMembersGroup(group)} /><IconButton variant="ghost" label={t("edit")} icon={<Pencil />} onClick={() => setEditing(group)} /><IconButton variant="ghost" label={t("delete")} icon={<Trash2 />} onClick={() => void remove(group)} /></RowActions></td></tr>)}</tbody></table></DataPanel>{editing && <NameDialog title={`${editing === "new" ? t("new") : t("edit")} ${t("group")}`} label={t("groupName")} initialValue={editing === "new" ? "" : editing.name} onClose={() => setEditing(null)} onSave={save} />}{membersGroup && <GroupMembersDialog group={membersGroup} users={users} onClose={() => setMembersGroup(null)} onSave={saveMembers} />}</div>
 }
 
 function GroupMembersDialog({ group, users, onClose, onSave }: { group: Group; users: User[]; onClose: () => void; onSave: (memberIds: string[]) => Promise<void> }) {
@@ -568,7 +611,17 @@ function TrashPage({ isAdmin, notify }: { isAdmin: boolean; notify: (text: strin
 
 function TrashRow({ name, canAct, onRestore, onPurge }: { name: string; canAct: boolean; onRestore: () => void; onPurge: () => void }) { const { t } = useI18n(); return <div className="trash-row"><strong>{name}</strong>{canAct ? <RowActions><Button variant="ghost" size="sm" icon={<RefreshCw />} label={t("restore")} onClick={onRestore} /><Button variant="ghost" size="sm" icon={<Trash2 />} label={t("purge")} onClick={onPurge} /></RowActions> : <StatusPill value="readOnly" />}</div> }
 
-function IntegrationsPage() {
+function ServiceEndpoint({ notify, id }: { notify: (text: string, error?: boolean) => void; id?: string }) {
+  const { t } = useI18n()
+  const endpoint = location.origin
+  async function copy() {
+    await navigator.clipboard.writeText(endpoint)
+    notify(t("endpointCopied"))
+  }
+  return <div className="service-endpoint" id={id}><span className="panel-icon"><Globe2 /></span><div><strong>{t("serviceEndpoint")}</strong><code>{endpoint}</code><small>{t("serviceEndpointHint")}</small></div><IconButton variant="ghost" label={t("copyEndpoint")} icon={<Copy />} onClick={() => void copy()} /></div>
+}
+
+function IntegrationsPage({ notify }: { notify: (text: string, error?: boolean) => void }) {
   const { t } = useI18n()
   const links: Array<{ title: MessageKey; href: string; detail: string }> = [
     { title: "officialSdk", href: "https://github.com/bitwarden/sdk-sm", detail: "Rust · JavaScript · Python · C#" },
@@ -576,7 +629,39 @@ function IntegrationsPage() {
     { title: "fnox", href: "https://fnox.jdx.dev/providers/bitwarden-sm", detail: "provider = \"bitwarden-sm\"" },
     { title: "bitwardenHelp", href: "https://bitwarden.com/help/secrets-manager-overview/", detail: "Concepts · SDK · Machine access" },
   ]
-  return <div className="page"><PageHeader title={t("integrations")} description={t("integrationsIntro")} /><section className="integration-grid">{links.map((link) => <a className="integration-card" key={link.href} href={link.href} target="_blank" rel="noreferrer"><span className="panel-icon"><Network /></span><div><h2>{t(link.title)}</h2><code>{link.detail}</code><span>{t("openLink")} <ExternalLink /></span></div></a>)}</section></div>
+  return <div className="page"><PageHeader title={t("integrations")} description={t("integrationsIntro")} /><ServiceEndpoint notify={notify} /><section className="integration-grid">{links.map((link) => <a className="integration-card" key={link.href} href={link.href} target="_blank" rel="noreferrer"><span className="panel-icon"><Network /></span><div><h2>{t(link.title)}</h2><code>{link.detail}</code><span>{t("openLink")} <ExternalLink /></span></div></a>)}</section></div>
+}
+
+function HelpPage({ notify }: { notify: (text: string, error?: boolean) => void }) {
+  const { t } = useI18n()
+  const endpoint = location.origin
+  return <div className="page help-page"><PageHeader title={t("help")} description={t("helpIntro")} />
+    <ServiceEndpoint notify={notify} />
+    <nav className="help-toc" aria-label={t("helpContents")}>
+      <strong>{t("helpContents")}</strong>
+      <a href="#help-start">{t("helpStartTitle")}</a><a href="#help-model">{t("helpModelTitle")}</a><a href="#help-automation">{t("helpAutomationTitle")}</a><a href="#help-people">{t("helpPeopleTitle")}</a><a href="#help-operations">{t("helpOperationsTitle")}</a>
+    </nav>
+    <section className="help-section" id="help-start"><div className="help-section-heading"><span>01</span><div><p className="eyebrow">{t("helpMinimumLabel")}</p><h2>{t("helpStartTitle")}</h2><p>{t("helpStartIntro")}</p></div></div>
+      <ol className="help-steps"><li><strong>{t("helpStartStep1Title")}</strong><p>{t("helpStartStep1Text")}</p></li><li><strong>{t("helpStartStep2Title")}</strong><p>{t("helpStartStep2Text")}</p></li><li><strong>{t("helpStartStep3Title")}</strong><p>{t("helpStartStep3Text")}</p></li></ol>
+      <div className="help-note"><Info /><p><strong>{t("helpWebSecretTitle")}</strong>{t("helpWebSecretText")}</p></div>
+    </section>
+    <section className="help-section" id="help-model"><div className="help-section-heading"><span>02</span><div><p className="eyebrow">{t("helpConceptsLabel")}</p><h2>{t("helpModelTitle")}</h2><p>{t("helpModelIntro")}</p></div></div>
+      <div className="help-card-grid"><article><KeyRound /><h3>{t("secret")}</h3><p>{t("helpSecretConcept")}</p></article><article><FolderKanban /><h3>{t("project")}</h3><p>{t("helpProjectConcept")}</p></article><article><ServerCog /><h3>{t("machineAccount")}</h3><p>{t("helpMachineConcept")}</p></article><article><UsersRound /><h3>{t("usersAndGroups")}</h3><p>{t("helpPeopleConcept")}</p></article></div>
+      <div className="help-note"><ShieldCheck /><p><strong>{t("helpPermissionTitle")}</strong>{t("helpPermissionText")}</p></div>
+    </section>
+    <section className="help-section" id="help-automation"><div className="help-section-heading"><span>03</span><div><p className="eyebrow">{t("helpScenarioLabel")}</p><h2>{t("helpAutomationTitle")}</h2><p>{t("helpAutomationIntro")}</p></div></div>
+      <ol className="help-steps"><li><strong>{t("helpAutomationStep1Title")}</strong><p>{t("helpAutomationStep1Text")}</p></li><li><strong>{t("helpAutomationStep2Title")}</strong><p>{t("helpAutomationStep2Text")}</p></li><li><strong>{t("helpAutomationStep3Title")}</strong><p>{t("helpAutomationStep3Text")}</p></li><li><strong>{t("helpAutomationStep4Title")}</strong><p>{t("helpAutomationStep4Text")}</p></li></ol>
+      <pre className="help-code" role="region" tabIndex={0} aria-label={t("helpCodeLabel")}><code>{`export BWS_ACCESS_TOKEN='<access-token>'\nexport BWS_SERVER_URL='${endpoint}'\nbws project list\nfnox get DATABASE_URL`}</code></pre>
+      <div className="help-note"><Clock3 /><p><strong>{t("helpTokenTitle")}</strong>{t("helpTokenText")}</p></div>
+    </section>
+    <section className="help-section" id="help-people"><div className="help-section-heading"><span>04</span><div><p className="eyebrow">{t("helpScenarioLabel")}</p><h2>{t("helpPeopleTitle")}</h2><p>{t("helpPeopleIntro")}</p></div></div>
+      <ol className="help-steps"><li><strong>{t("helpPeopleStep1Title")}</strong><p>{t("helpPeopleStep1Text")}</p></li><li><strong>{t("helpPeopleStep2Title")}</strong><p>{t("helpPeopleStep2Text")}</p></li><li><strong>{t("helpPeopleStep3Title")}</strong><p>{t("helpPeopleStep3Text")}</p></li></ol>
+    </section>
+    <section className="help-section" id="help-operations"><div className="help-section-heading"><span>05</span><div><p className="eyebrow">{t("helpOperationsLabel")}</p><h2>{t("helpOperationsTitle")}</h2><p>{t("helpOperationsIntro")}</p></div></div>
+      <div className="help-card-grid"><article><ScrollText /><h3>{t("auditLog")}</h3><p>{t("helpAuditText")}</p></article><article><Trash2 /><h3>{t("trash")}</h3><p>{t("helpTrashText")}</p></article><article><DatabaseBackup /><h3>{t("backups")}</h3><p>{t("helpBackupText")}</p></article><article><ArchiveRestore /><h3>{t("transfer")}</h3><p>{t("helpTransferText")}</p></article></div>
+      <div className="help-note"><Info /><p><strong>{t("helpTroubleshootTitle")}</strong>{t("helpTroubleshootText")}</p></div>
+    </section>
+  </div>
 }
 
 function BackupsPage({ notify }: { notify: (text: string, error?: boolean) => void }) {
@@ -644,8 +729,8 @@ function SettingsPage() {
 
 function ListToolbar({ query, onQuery }: { query: string; onQuery: (value: string) => void }) { const { t } = useI18n(); return <div className="list-toolbar"><Search /><input aria-label={t("search")} placeholder={`${t("search")}…`} value={query} onChange={(event) => onQuery(event.target.value)} /></div> }
 
-function DataPanel({ empty, onEmptyAction, children }: { empty: boolean; onEmptyAction?: () => void; children?: ReactNode }) {
-  const { t } = useI18n(); return <section className="data-panel">{empty ? <div className="empty-state"><span><Boxes /></span><h2>{t("emptyTitle")}</h2><p>{t("emptyDescription")}</p>{onEmptyAction && <Button variant="secondary" icon={<Plus />} label={t("create")} onClick={onEmptyAction} />}</div> : <div className="table-scroll">{children}</div>}</section>
+function DataPanel({ empty, emptyIcon, emptyTitle, emptyDescription, emptyActionLabel, onEmptyAction, children }: { empty: boolean; emptyIcon?: ReactNode; emptyTitle?: string; emptyDescription?: string; emptyActionLabel?: string; onEmptyAction?: () => void; children?: ReactNode }) {
+  const { t } = useI18n(); return <section className="data-panel">{empty ? <div className="empty-state"><span>{emptyIcon || <Boxes />}</span><h2>{emptyTitle || t("emptyTitle")}</h2><p>{emptyDescription || t("emptyDescription")}</p>{onEmptyAction && <Button variant="secondary" icon={<Plus />} label={emptyActionLabel || t("create")} onClick={onEmptyAction} />}</div> : <div className="table-scroll">{children}</div>}</section>
 }
 
 function Modal({ title, onClose, wide = false, children }: { title: string; onClose: () => void; wide?: boolean; children: ReactNode }) {
@@ -669,7 +754,7 @@ function StatusPill({ value }: { value: string }) { const { t } = useI18n(); con
 function formatDate(value: number) { return new Intl.DateTimeFormat(document.documentElement.lang || "en", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value * 1000)) }
 function grantKey(bucket: GrantBucketKey, id: string) { return `${bucket}:${id}` }
 function shortId(value: string | null) { return value ? value.slice(0, 8) : "—" }
-function validPage(value: string): Page | null { return (["dashboard", "projects", "secrets", "machines", "users", "groups", "audit", "trash", "integrations", "backups", "transfer", "settings"] as Page[]).includes(value as Page) ? value as Page : null }
+function validPage(value: string): Page | null { return (["dashboard", "projects", "secrets", "machines", "users", "groups", "audit", "trash", "integrations", "help", "backups", "transfer", "settings"] as Page[]).includes(value as Page) ? value as Page : null }
 function availablePage(value: string, isAdmin: boolean): Page {
   const page = validPage(value) || "dashboard"
   return !isAdmin && adminPages.has(page) ? "dashboard" : page

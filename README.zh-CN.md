@@ -84,7 +84,7 @@ docker compose pull
 docker compose up -d
 ```
 
-如果部署需要固定版本，可在 `.env` 中设置 `LIGHTBWS_IMAGE=ghcr.io/ca-x/lightbws:0.2.1`。执行 `docker compose down` 会保留数据卷，执行 `docker compose down -v` 会永久删除数据卷。
+如果部署需要固定版本，可在 `.env` 中设置 `LIGHTBWS_IMAGE=ghcr.io/ca-x/lightbws:0.2.2`。执行 `docker compose down` 会保留数据卷，执行 `docker compose down -v` 会永久删除数据卷。
 
 ### 发布二进制
 
@@ -143,13 +143,13 @@ openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n'
 
 ## 权限模型
 
-LightBWS 按照 Bitwarden Secrets Manager 的模型实现权限系统。系统只有一个组织边界，不存在个人密钥空间，每个密钥必须且只能属于一个项目。
+LightBWS 按照 Bitwarden Secrets Manager 的模型实现权限系统。系统只有一个组织边界，不存在个人密钥空间。网页管理的密钥可以不属于项目；SDK 加密密钥则必须位于项目中。
 
 | 实体 | 用途 | 权限方式 |
 | --- | --- | --- |
 | 项目 | 对相关密钥进行分组，也是主要权限边界。 | 用户、用户组和机器账户可以获得只读或读写权限。 |
 | 机器账户 | 代表 CI/CD、应用和其他非人工客户端。 | 使用一次性访问令牌认证，每个项目可以配置不同权限。 |
-| 密钥 | 保存项目中的一个敏感键值对。 | 可以直接为用户、用户组或机器账户增加只读或读写权限，并与项目权限叠加。 |
+| 密钥 | 保存一组敏感名称和值；通过网页管理时可以不属于项目。 | 可以直接为用户、用户组或机器账户增加只读或读写权限，并与项目权限叠加。 |
 
 管理员负责管理用户、用户组、机器账户、项目和授权。普通成员只能看到自己可读取的项目与密钥。读写权限决定用户能否创建、编辑、移动或删除密钥。系统会在每次请求时计算用户组继承关系，因此修改权限后无需重启服务或客户端。
 
@@ -289,8 +289,8 @@ npm --prefix web audit
 
 ```bash
 git push origin main
-git tag -a v0.2.1 -m "LightBWS v0.2.1"
-git push origin v0.2.1
+git tag -a v0.2.2 -m "LightBWS v0.2.2"
+git push origin v0.2.2
 ```
 
 Docker 工作流会在 GitHub 原生 Runner 上分别构建 `linux/amd64` 和 `linux/arm64`，再将相同的多架构标签发布到 `ghcr.io/ca-x/lightbws` 和 `docker.io/czyt/lightbws`。仓库或组织需要提供 `DOCKERHUB_USERNAME` 和 `DOCKERHUB_TOKEN` 两个 secret。每个发布压缩包包含二进制、两种语言的 README 和许可证，并提供独立的 SHA-256 校验文件。前端文件已经嵌入二进制。

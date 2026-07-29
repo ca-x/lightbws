@@ -84,7 +84,7 @@ docker compose pull
 docker compose up -d
 ```
 
-Set `LIGHTBWS_IMAGE=ghcr.io/ca-x/lightbws:0.2.1` in `.env` when a deployment must remain pinned to a specific release. Running `docker compose down` keeps the data volume; `docker compose down -v` permanently deletes it.
+Set `LIGHTBWS_IMAGE=ghcr.io/ca-x/lightbws:0.2.2` in `.env` when a deployment must remain pinned to a specific release. Running `docker compose down` keeps the data volume; `docker compose down -v` permanently deletes it.
 
 ### Release binary
 
@@ -143,13 +143,13 @@ Keep the key secret and back it up separately. Do not rotate or replace it witho
 
 ## Access model
 
-LightBWS follows the Bitwarden Secrets Manager model. It has one organization boundary and no personal secret space. Every secret belongs to exactly one project.
+LightBWS follows the Bitwarden Secrets Manager model. It has one organization boundary and no personal secret space. Web-managed secrets may remain unassigned; SDK-encrypted secrets belong to a project.
 
 | Entity | Purpose | Access |
 | --- | --- | --- |
 | Project | Groups related secrets and provides the main permission boundary. | Users, groups, and machine accounts receive read or read/write access. |
 | Machine account | Represents CI/CD, applications, and other non-human clients. | Uses a one-time access token and can receive different permissions for each project. |
-| Secret | Stores one sensitive key/value pair inside a project. | Direct user, group, or machine grants can add read or read/write access to the project permission. |
+| Secret | Stores one sensitive key/value pair, optionally unassigned when managed through the Web UI. | Direct user, group, or machine grants can add read or read/write access to any project permission. |
 
 Administrators manage users, groups, machine accounts, projects, and grants. Members see only the projects and secrets they can read. Write controls whether they can create, edit, move, or delete secrets. Group membership is evaluated on every request, so permission changes take effect without restarting the server or client.
 
@@ -289,8 +289,8 @@ After CI succeeds on `main`, pushing a semantic `vX.Y.Z` tag starts two release 
 
 ```bash
 git push origin main
-git tag -a v0.2.1 -m "LightBWS v0.2.1"
-git push origin v0.2.1
+git tag -a v0.2.2 -m "LightBWS v0.2.2"
+git push origin v0.2.2
 ```
 
 The Docker workflow builds `linux/amd64` and `linux/arm64` on native GitHub runners, then publishes the same multi-platform tags to `ghcr.io/ca-x/lightbws` and `docker.io/czyt/lightbws`. Repository or organization secrets named `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` are required. Each release archive contains the binary, both language READMEs, and the license, with a companion SHA-256 checksum asset. Frontend files are already embedded in the binary.
