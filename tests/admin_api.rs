@@ -136,6 +136,68 @@ async fn administrator_manages_users_while_last_admin_and_member_boundaries_hold
         .await;
     assert_eq!(last_admin.status(), StatusCode::CONFLICT);
 
+    let promoted = fixture
+        .request(json_request(
+            Method::PUT,
+            &format!("/api/v1/admin/users/{member_id}"),
+            Some(json!({ "displayName": "Member", "role": "admin", "disabled": false })),
+            Some(&cookies),
+            Some(&csrf),
+        ))
+        .await;
+    assert_eq!(promoted.status(), StatusCode::OK);
+
+    let self_disable = fixture
+        .request(json_request(
+            Method::PUT,
+            &format!("/api/v1/admin/users/{}", admin["id"].as_str().unwrap()),
+            Some(json!({ "displayName": "Administrator", "role": "admin", "disabled": true })),
+            Some(&cookies),
+            Some(&csrf),
+        ))
+        .await;
+    assert_eq!(self_disable.status(), StatusCode::CONFLICT);
+
+    let unknown_field = fixture
+        .request(json_request(
+            Method::POST,
+            "/api/v1/admin/users",
+            Some(json!({
+                "username": "unexpected",
+                "displayName": "Unexpected",
+                "role": "user",
+                "password": "member-password-123",
+                "disabled": false
+            })),
+            Some(&cookies),
+            Some(&csrf),
+        ))
+        .await;
+    assert_eq!(unknown_field.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    let invalid_display_name = fixture
+        .request(json_request(
+            Method::POST,
+            "/api/v1/admin/users",
+            Some(json!({
+                "username": "invalid-name",
+                "displayName": "x".repeat(129),
+                "role": "user",
+                "password": "member-password-123"
+            })),
+            Some(&cookies),
+            Some(&csrf),
+        ))
+        .await;
+    assert_eq!(
+        invalid_display_name.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    assert_eq!(
+        response_json(invalid_display_name).await["error"]["code"],
+        "VALIDATION"
+    );
+
     let reset = fixture
         .request(json_request(
             Method::PUT,

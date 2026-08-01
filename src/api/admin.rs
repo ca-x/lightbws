@@ -23,7 +23,7 @@ use crate::{
 };
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct CreateUserInput {
     username: String,
     display_name: String,
@@ -32,7 +32,7 @@ struct CreateUserInput {
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct UpdateUserInput {
     display_name: String,
     role: Role,
@@ -40,11 +40,13 @@ struct UpdateUserInput {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PasswordInput {
     password: String,
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CreateMachineInput {
     name: String,
 }
@@ -63,12 +65,13 @@ struct MachineEventsQuery {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct GroupInput {
     name: String,
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct GroupMembersInput {
     member_ids: Vec<Uuid>,
 }
@@ -207,6 +210,11 @@ async fn update_user(
     Json(input): Json<UpdateUserInput>,
 ) -> Result<Json<PublicUser>, AppError> {
     require_admin(&mutation.0.user)?;
+    if id == mutation.0.user_id
+        && (input.role != mutation.0.user.role || input.disabled != mutation.0.user.disabled)
+    {
+        return Err(AppError::Conflict);
+    }
     let updated = UserRepository::new(state.db.clone())
         .update(id, &input.display_name, input.role, input.disabled)
         .await?;

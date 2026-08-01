@@ -1,7 +1,10 @@
 import type { AccessPolicy, AccessPolicyInput, AuditEvent, AuditSettings, BackupCapabilities, BackupJob, BackupScopes, BackupTarget, Group, IssuedMachineAccessToken, IssuedMachineAccount, MachineAccess, MachineAccessInput, MachineAccessToken, MachineAccount, Overview, Project, Role, Secret, Session, User } from "./types"
 
 export class ApiError extends Error {
-  constructor(public status: number, public code: string) { super(code) }
+  constructor(public status: number, public code: string, public detail?: string) {
+    super(detail || code)
+    this.name = "ApiError"
+  }
 }
 
 let csrfToken = ""
@@ -13,8 +16,8 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (!["GET", "HEAD"].includes(method)) headers.set("x-csrf-token", csrfToken)
   const response = await fetch(`/api/v1${path}`, { ...init, headers, credentials: "same-origin" })
   if (!response.ok) {
-    const body = await response.json().catch(() => null) as { error?: { code?: string } } | null
-    throw new ApiError(response.status, body?.error?.code || "UNKNOWN")
+    const body = await response.json().catch(() => null) as { error?: { code?: string; message?: string } } | null
+    throw new ApiError(response.status, body?.error?.code || "UNKNOWN", body?.error?.message)
   }
   if (response.status === 204) return undefined as T
   return response.json() as Promise<T>

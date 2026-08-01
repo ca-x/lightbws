@@ -66,14 +66,14 @@ impl Config {
 pub fn validate_username(value: &str) -> Result<&str> {
     let value = value.trim();
     if !(1..=128).contains(&value.chars().count()) || value.chars().any(char::is_control) {
-        bail!("administrator username is invalid");
+        bail!("username must contain 1-128 non-control characters");
     }
     Ok(value)
 }
 
 pub fn validate_password(value: &str) -> Result<&str> {
     if !(6..=4096).contains(&value.chars().count()) || value.chars().any(char::is_control) {
-        bail!("administrator password must contain 6-4096 non-control characters");
+        bail!("password must contain 6-4096 non-control characters");
     }
     Ok(value)
 }
