@@ -46,8 +46,10 @@ describe("authentication routes", () => {
     render(<Providers><App /></Providers>)
 
     await waitFor(() => expect(location.pathname).toBe("/login"))
-    await userEvent.type(screen.getByLabelText("Username"), "admin")
-    await userEvent.type(screen.getByLabelText("Password"), "password")
+    expect(screen.getByRole("heading", { level: 1, name: "Open your secure workspace" })).toBeInTheDocument()
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1)
+    await userEvent.type(screen.getByLabelText(/^Username/), "admin")
+    await userEvent.type(screen.getByLabelText(/^Password/), "password")
     await userEvent.click(screen.getByRole("button", { name: "Sign in" }))
 
     await waitFor(() => expect(location.pathname).toBe("/"))

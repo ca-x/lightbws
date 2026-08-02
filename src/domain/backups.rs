@@ -554,17 +554,16 @@ async fn upload_s3(
         .host_str()
         .ok_or_else(|| AppError::Validation("backup endpoint has no host".into()))?
         .to_owned();
+    let full_key = join_prefix(&config.prefix, object_key);
+    let mut path_segments = Vec::new();
     if config.path_style {
-        url.set_path(&format!(
-            "/{}/{}",
-            config.bucket,
-            join_prefix(&config.prefix, object_key)
-        ));
+        path_segments.push(config.bucket.as_str());
     } else {
         url.set_host(Some(&format!("{}.{}", config.bucket, endpoint_host)))
             .map_err(|_| AppError::Validation("invalid S3 bucket host".into()))?;
-        url.set_path(&format!("/{}", join_prefix(&config.prefix, object_key)));
     }
+    path_segments.extend(full_key.split('/').filter(|segment| !segment.is_empty()));
+    replace_url_path(&mut url, &path_segments)?;
     let client = secure_client(&url).await?;
     let timestamp = time::OffsetDateTime::now_utc();
     let date = format!(
@@ -827,6 +826,9 @@ fn normalize_bucket(value: &str) -> Result<String, AppError> {
 
 fn normalize_prefix(value: &str) -> Result<String, AppError> {
     let value = value.trim().trim_matches('/');
+    if value.is_empty() {
+        return Ok(String::new());
+    }
     if value.len() > 512
         || value.split('/').any(|segment| {
             segment.is_empty()
@@ -975,13 +977,19 @@ fn join_prefix(prefix: &str, key: &str) -> String {
 
 fn append_url_path(base: &Url, segments: &[&str]) -> Result<Url, AppError> {
     let mut url = base.clone();
-    let mut path = url.path().trim_end_matches('/').to_owned();
-    for segment in segments {
-        path.push('/');
-        path.push_str(segment);
-    }
-    url.set_path(&path);
+    url.path_segments_mut()
+        .map_err(|()| AppError::Validation("backup endpoint cannot contain path segments".into()))?
+        .pop_if_empty()
+        .extend(segments);
     Ok(url)
+}
+
+fn replace_url_path(url: &mut Url, segments: &[&str]) -> Result<(), AppError> {
+    url.path_segments_mut()
+        .map_err(|()| AppError::Validation("backup endpoint cannot contain path segments".into()))?
+        .clear()
+        .extend(segments);
+    Ok(())
 }
 
 fn authority(url: &Url) -> Result<String, AppError> {
@@ -1088,7 +1096,8 @@ pub(crate) fn validate_restored_target(
 
 #[cfg(test)]
 mod tests {
-    use super::{is_public_ip, normalize_prefix};
+    use super::{append_url_path, is_public_ip, normalize_prefix, replace_url_path};
+    use reqwest::Url;
     use std::net::{IpAddr, Ipv4Addr};
 
     #[test]
@@ -1096,7 +1105,26 @@ mod tests {
         assert!(!is_public_ip(IpAddr::V4(Ipv4Addr::LOCALHOST)));
         assert!(!is_public_ip(IpAddr::V4(Ipv4Addr::new(10, 1, 2, 3))));
         assert!(is_public_ip(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1))));
+        assert_eq!(normalize_prefix("").unwrap(), "");
+        assert_eq!(normalize_prefix(" / ").unwrap(), "");
         assert!(normalize_prefix("safe/daily").is_ok());
         assert!(normalize_prefix("safe/../escape").is_err());
+    }
+
+    #[test]
+    fn appends_backup_paths_as_literal_segments() {
+        let base = Url::parse("https://dav.example.com/tenant/backups").unwrap();
+        let url = append_url_path(&base, &["%2e%2e", "archive.lightbws"]).unwrap();
+        assert_eq!(
+            url.as_str(),
+            "https://dav.example.com/tenant/backups/%252e%252e/archive.lightbws"
+        );
+
+        let mut s3 = Url::parse("https://s3.example.com").unwrap();
+        replace_url_path(&mut s3, &["bucket", "%2e%2e", "archive.lightbws"]).unwrap();
+        assert_eq!(
+            s3.as_str(),
+            "https://s3.example.com/bucket/%252e%252e/archive.lightbws"
+        );
     }
 }

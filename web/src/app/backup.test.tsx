@@ -3,7 +3,32 @@ import userEvent from "@testing-library/user-event"
 import { describe, expect, it } from "vitest"
 
 import { Providers } from "./Providers"
-import { LabelWithTip, canUsePlaintext, defaultBackupScopes, detectArchiveKind, normalizeScopes, plaintextSelectionReady } from "./App"
+import { LabelWithTip, canUsePlaintext, defaultBackupScopes, detectArchiveKind, normalizeScopes, plaintextSelectionReady, validateBackupForm, type BackupForm } from "./App"
+
+const translateKey = (key: string) => key
+
+function validS3Form(): BackupForm {
+  return {
+    kind: "S3",
+    displayName: "Daily archive",
+    endpoint: "https://s3.example.com",
+    region: "us-east-1",
+    bucket: "lightbws-backups",
+    prefix: "daily/production",
+    pathStyle: true,
+    accessKeyId: "access-key",
+    secretAccessKey: "secret-key",
+    sessionToken: "",
+    username: "",
+    password: "",
+    enabled: true,
+    scheduleEnabled: true,
+    intervalHours: "24",
+    scopes: defaultBackupScopes(),
+    encryption: "masterKey",
+    confirmPlaintext: false,
+  }
+}
 
 describe("backup controls", () => {
   it("defaults to projects and secrets only", () => {
@@ -49,5 +74,31 @@ describe("backup controls", () => {
     expect(trigger).toHaveAttribute("aria-expanded", "false")
     await userEvent.click(trigger)
     expect(trigger).toHaveAttribute("aria-expanded", "true")
+  })
+
+  it("mirrors server constraints before saving a backup target", () => {
+    expect(validateBackupForm(validS3Form(), false, translateKey)).toEqual({})
+    expect(validateBackupForm({ ...validS3Form(), prefix: " / " }, false, translateKey)).toEqual({})
+
+    const invalid = { ...validS3Form(), endpoint: "http://s3.example.com/path", bucket: "x", intervalHours: "0" }
+    expect(validateBackupForm(invalid, false, translateKey)).toMatchObject({
+      endpoint: "backupEndpointRequirement",
+      bucket: "backupBucketRequirement",
+      intervalHours: "backupIntervalRequirement",
+    })
+    expect(validateBackupForm({ ...validS3Form(), prefix: "é".repeat(257) }, false, translateKey).prefix).toBe("backupPrefixRequirement")
+  })
+
+  it("requires a complete credential pair only when editing credentials", () => {
+    const unchanged = { ...validS3Form(), accessKeyId: "", secretAccessKey: "" }
+    expect(validateBackupForm(unchanged, true, translateKey)).toEqual({})
+
+    const partial = { ...unchanged, accessKeyId: "replacement" }
+    expect(validateBackupForm(partial, true, translateKey).secretAccessKey).toBe("backupCredentialPairRequirement")
+  })
+
+  it("allows WebDAV paths while keeping HTTPS mandatory", () => {
+    const form: BackupForm = { ...validS3Form(), kind: "WEBDAV", endpoint: "https://dav.example.com/backups", username: "user", password: "secret" }
+    expect(validateBackupForm(form, false, translateKey)).toEqual({})
   })
 })
