@@ -299,4 +299,12 @@ git tag -a v0.2.7 -m "LightBWS v0.2.7"
 git push origin v0.2.7
 ```
 
+If a hosted runner is retired after a tag is published, update the release workflow and rerun it against that existing tag without moving the tag:
+
+```bash
+gh workflow run release.yml --ref main -f tag=v0.2.7
+```
+
+The recovery run validates the tag's package versions and pins every build to its resolved source commit; archive names and the release still use the selected tag.
+
 The Docker workflow builds `linux/amd64` and `linux/arm64` on native GitHub runners, then publishes the same multi-platform tags to `ghcr.io/ca-x/lightbws` and `docker.io/czyt/lightbws`. Repository or organization secrets named `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` are required. Each release archive contains the binary, both language READMEs, and the license, with a companion SHA-256 checksum asset. Frontend files are already embedded in the binary.

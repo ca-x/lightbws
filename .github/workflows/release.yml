@@ -3,6 +3,15 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag (vX.Y.Z)
+        type: string
+        required: true
+
+env:
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
 permissions:
   contents: write
@@ -10,28 +19,35 @@ permissions:
 jobs:
   preflight:
     runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.source.outputs.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: refs/tags/${{ env.RELEASE_TAG }}
       - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
         with:
           node-version: 24
       - name: Validate tag and package versions
+        id: source
         shell: bash
         run: |
           set -euo pipefail
-          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "Release tag must match vX.Y.Z" >&2
             exit 1
           fi
-          version="${GITHUB_REF_NAME#v}"
+          version="${RELEASE_TAG#v}"
           cargo_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)"
           demo_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' demo/sdk-demo/Cargo.toml | head -n 1)"
           web_version="$(node -p "require('./web/package.json').version")"
           test "$version" = "$cargo_version"
           test "$version" = "$demo_version"
           test "$version" = "$web_version"
+          source_sha="$(git rev-parse HEAD)"
+          test "$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")" = "$source_sha"
+          printf 'sha=%s\n' "$source_sha" >> "$GITHUB_OUTPUT"
 
   verify:
     needs: preflight
@@ -40,6 +56,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ needs.preflight.outputs.sha }}
       - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
         with:
           node-version: 24
@@ -61,7 +78,7 @@ jobs:
       - run: cargo check --manifest-path demo/sdk-demo/Cargo.toml
 
   binaries:
-    needs: verify
+    needs: [preflight, verify]
     strategy:
       fail-fast: false
       matrix:
@@ -74,9 +91,9 @@ jobs:
             target: x86_64-unknown-linux-musl
           - os: ubuntu-latest
             target: aarch64-unknown-linux-musl
-          - os: macos-14
+          - os: macos-15
             target: x86_64-apple-darwin
-          - os: macos-14
+          - os: macos-15
             target: aarch64-apple-darwin
           - os: windows-latest
             target: x86_64-pc-windows-msvc
@@ -85,6 +102,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ needs.preflight.outputs.sha }}
       - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
         with:
           node-version: 24
@@ -106,9 +124,9 @@ jobs:
           mkdir -p dist/package
           cp "target/${{ matrix.target }}/release/lightbws" dist/package/lightbws
           cp README.md README.zh-CN.md LICENSE dist/package/
-          tar -C dist/package -czf "dist/lightbws-${GITHUB_REF_NAME}-${{ matrix.target }}.tar.gz" .
+          tar -C dist/package -czf "dist/lightbws-${RELEASE_TAG}-${{ matrix.target }}.tar.gz" .
           cd dist
-          shasum -a 256 "lightbws-${GITHUB_REF_NAME}-${{ matrix.target }}.tar.gz" > "lightbws-${GITHUB_REF_NAME}-${{ matrix.target }}.tar.gz.sha256"
+          shasum -a 256 "lightbws-${RELEASE_TAG}-${{ matrix.target }}.tar.gz" > "lightbws-${RELEASE_TAG}-${{ matrix.target }}.tar.gz.sha256"
       - name: Package Windows binary
         if: runner.os == 'Windows'
         shell: pwsh
@@ -116,7 +134,7 @@ jobs:
           New-Item -ItemType Directory -Force dist/package | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/lightbws.exe" dist/package/
           Copy-Item README.md,README.zh-CN.md,LICENSE dist/package/
-          $archive = "dist/lightbws-${env:GITHUB_REF_NAME}-${{ matrix.target }}.zip"
+          $archive = "dist/lightbws-${env:RELEASE_TAG}-${{ matrix.target }}.zip"
           Compress-Archive -Path dist/package/* -DestinationPath $archive
           $hash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLower()
           "$hash  $(Split-Path $archive -Leaf)" | Set-Content "$archive.sha256"
@@ -130,7 +148,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: binaries
+    needs: [preflight, binaries]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -140,6 +158,9 @@ jobs:
           merge-multiple: true
       - uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2.5.0
         with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: ${{ env.RELEASE_TAG }}
+          target_commitish: ${{ needs.preflight.outputs.sha }}
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: |
