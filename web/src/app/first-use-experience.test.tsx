@@ -126,8 +126,9 @@ describe("first-use experience", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: /new secret/i }))
 
-    expect(screen.getByRole("combobox", { name: "Project" })).toHaveValue("")
-    expect(screen.getByText("No project is selected. Grant people or machine accounts direct access; fnox requires a project.")).toBeInTheDocument()
+    const dialog = await screen.findByRole("dialog", { name: "New secret" })
+    expect(await within(dialog).findByRole("combobox", { name: "Project" })).toHaveValue("")
+    expect(within(dialog).getByText("No project is selected. Grant people or machine accounts direct access; fnox requires a project.")).toBeInTheDocument()
   })
 
   it("guides a single-admin workspace to add users before groups", async () => {
@@ -136,7 +137,8 @@ describe("first-use experience", () => {
 
     expect(await screen.findByRole("heading", { name: "Add users before groups" })).toBeInTheDocument()
     await userEvent.click(screen.getByRole("button", { name: "Add a user first" }))
-    await waitFor(() => expect(location.hash).toBe("#users"))
+    expect(await screen.findByRole("dialog", { name: "New user" })).toBeInTheDocument()
+    expect(location.hash).toBe("#groups")
   })
 
   it("shows loading instead of a false empty state while users are requested", async () => {

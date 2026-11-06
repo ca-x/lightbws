@@ -189,7 +189,7 @@ describe("admin experience", () => {
     await userEvent.click(displayName)
     expect(displayName).toHaveFocus()
 
-    fireEvent.click(screen.getByRole("button", { name: "Navigation" }))
+    fireEvent.blur(displayName)
     await act(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
 
     expect(displayName).toHaveFocus()

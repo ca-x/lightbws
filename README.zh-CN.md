@@ -22,6 +22,10 @@ LightBWS 实现的是 Bitwarden Secrets Manager 工作流。Secrets Manager 和�
 
 LightBWS 适合为服务注入数据库连接地址、向 GitHub Actions 提供 API 令牌，或者管理 Homelab 中的部署凭据。它不能替代 Bitwarden Password Manager：LightBWS 不提供个人密码保险库、浏览器自动填充、Passkey 管理、家庭密码共享或数据泄露监控。两类产品可以配合使用。密码管理器保护“人使用的凭据”，Secrets Manager 负责把“软件需要的凭据”安全地交给程序和自动化流程。
 
+## 创建流程
+
+导航中的「新建」集中提供密钥、项目、机器账户、用户和用户组的创建入口，各资源页的新建按钮也使用同一流程。项目创建后可直接添加密钥或配置权限；填写密钥时也能就地创建并选中项目，不丢失草稿。打开项目即可筛选其中的密钥，并分享当前项目地址。管理员仍可创建不属于项目的密钥。
+
 ## 界面截图
 
 ![LightBWS 登录界面](screenshoot/login-zh.png)
@@ -86,7 +90,7 @@ docker compose pull
 docker compose up -d
 ```
 
-如果部署需要固定版本，可在 `.env` 中设置 `LIGHTBWS_IMAGE=ghcr.io/ca-x/lightbws:0.2.6`。执行 `docker compose down` 会保留数据卷，执行 `docker compose down -v` 会永久删除数据卷。
+如果部署需要固定版本，可在 `.env` 中设置 `LIGHTBWS_IMAGE=ghcr.io/ca-x/lightbws:0.2.7`。执行 `docker compose down` 会保留数据卷，执行 `docker compose down -v` 会永久删除数据卷。
 
 ### 发布二进制
 
@@ -291,8 +295,8 @@ npm --prefix web audit
 
 ```bash
 git push origin main
-git tag -a v0.2.6 -m "LightBWS v0.2.6"
-git push origin v0.2.6
+git tag -a v0.2.7 -m "LightBWS v0.2.7"
+git push origin v0.2.7
 ```
 
 Docker 工作流会在 GitHub 原生 Runner 上分别构建 `linux/amd64` 和 `linux/arm64`，再将相同的多架构标签发布到 `ghcr.io/ca-x/lightbws` 和 `docker.io/czyt/lightbws`。仓库或组织需要提供 `DOCKERHUB_USERNAME` 和 `DOCKERHUB_TOKEN` 两个 secret。每个发布压缩包包含二进制、两种语言的 README 和许可证，并提供独立的 SHA-256 校验文件。前端文件已经嵌入二进制。

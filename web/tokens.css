@@ -24,9 +24,10 @@
   --overlay: var(--color-overlay);
   --radius-control: var(--radius-element);
   --radius-panel: var(--radius-container);
-  --ease-out: var(--ease-standard);
-  --duration-press: var(--duration-fast);
-  --duration-layer: var(--duration-medium);
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+  --duration-press: 160ms;
+  --duration-layer: 200ms;
   font-family: var(--font-body);
   font-synthesis: none;
 }
