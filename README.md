@@ -307,4 +307,6 @@ gh workflow run release.yml --ref main -f tag=v0.2.7
 
 The recovery run validates the tag's package versions and pins every build to its resolved source commit; archive names and the release still use the selected tag.
 
+Publication rechecks the existing tag instead of sending a historical `target_commitish`, avoiding unnecessary workflow-write permissions.
+
 The Docker workflow builds `linux/amd64` and `linux/arm64` on native GitHub runners, then publishes the same multi-platform tags to `ghcr.io/ca-x/lightbws` and `docker.io/czyt/lightbws`. Repository or organization secrets named `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` are required. Each release archive contains the binary, both language READMEs, and the license, with a companion SHA-256 checksum asset. Frontend files are already embedded in the binary.

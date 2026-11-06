@@ -307,4 +307,6 @@ gh workflow run release.yml --ref main -f tag=v0.2.7
 
 补发任务会校验标签对应的包版本，并将全部构建固定到该标签解析出的源码提交；压缩包名称和 Release 仍使用所选标签。
 
+发布前会再次核对原标签，不额外传入旧版 `target_commitish`，避免触发不必要的工作流写入权限要求。
+
 Docker 工作流会在 GitHub 原生 Runner 上分别构建 `linux/amd64` 和 `linux/arm64`，再将相同的多架构标签发布到 `ghcr.io/ca-x/lightbws` 和 `docker.io/czyt/lightbws`。仓库或组织需要提供 `DOCKERHUB_USERNAME` 和 `DOCKERHUB_TOKEN` 两个 secret。每个发布压缩包包含二进制、两种语言的 README 和许可证，并提供独立的 SHA-256 校验文件。前端文件已经嵌入二进制。
